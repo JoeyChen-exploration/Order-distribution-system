@@ -268,10 +268,10 @@ export default function CreateOrderPage() {
                       <SelectValue placeholder="选择车型" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="sedan">轿车 (1-3人)</SelectItem>
-                      <SelectItem value="suv">SUV (1-5人)</SelectItem>
-                      <SelectItem value="van">商务车 (1-7人)</SelectItem>
-                      <SelectItem value="luxury">豪华车</SelectItem>
+                      <SelectItem value="舒适型">舒适型</SelectItem>
+                      <SelectItem value="豪华型">豪华型</SelectItem>
+                      <SelectItem value="商务型">商务型</SelectItem>
+                      <SelectItem value="经济型">经济型</SelectItem>
                     </SelectContent>
                   </Select>
                   {errors.vehicleType && (

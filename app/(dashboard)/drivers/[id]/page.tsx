@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -32,33 +32,69 @@ export default function DriverDetailPage() {
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
-    vehicleType: 'sedan' as VehicleType,
+    vehicleType: '舒适型' as VehicleType,
     vehiclePlate: '',
     homeAddress: '',
     dailyOrderLimit: 8,
     status: 'available' as DriverStatus,
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const mapRef = useRef<HTMLDivElement>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapInstanceRef = useRef<any>(null)
 
   useEffect(() => {
-    const data = getDriverById(driverId)
-    if (data) {
-      setDriver(data)
-      setFormData({
-        name: data.name,
-        phone: data.phone,
-        vehicleType: data.vehicleType,
-        vehiclePlate: data.vehiclePlate,
-        homeAddress: data.homeAddress,
-        dailyOrderLimit: data.dailyOrderLimit,
-        status: data.status,
-      })
-
-      // 获取该司机的订单
-      const orders = getOrders().filter(o => o.driverId === driverId)
-      setDriverOrders(orders)
+    async function load() {
+      const [data, allOrders] = await Promise.all([getDriverById(driverId), getOrders()])
+      if (data) {
+        setDriver(data)
+        setFormData({
+          name: data.name,
+          phone: data.phone,
+          vehicleType: data.vehicleType,
+          vehiclePlate: data.vehiclePlate,
+          homeAddress: data.homeAddress,
+          dailyOrderLimit: data.dailyOrderLimit,
+          status: data.status,
+        })
+      }
+      setDriverOrders(allOrders.filter(o => o.driverId === driverId))
     }
+    load()
   }, [driverId])
+
+  // 初始化高德地图
+  useEffect(() => {
+    if (!driver || !mapRef.current) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const AMap = (window as any).AMap
+    if (!AMap) return
+
+    const lng = driver.currentLng || driver.homeLng || 121.4737
+    const lat = driver.currentLat || driver.homeLat || 31.2304
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.destroy()
+    }
+
+    const map = new AMap.Map(mapRef.current, {
+      zoom: 14,
+      center: [lng, lat],
+      mapStyle: 'amap://styles/dark',
+    })
+    mapInstanceRef.current = map
+
+    new AMap.Marker({
+      position: new AMap.LngLat(lng, lat),
+      title: driver.name,
+      map,
+    })
+
+    return () => {
+      map.destroy()
+      mapInstanceRef.current = null
+    }
+  }, [driver])
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
@@ -93,7 +129,7 @@ export default function DriverDetailPage() {
     setIsSubmitting(true)
 
     try {
-      updateDriver(driverId, {
+      await updateDriver(driverId, {
         name: formData.name,
         phone: formData.phone,
         vehicleType: formData.vehicleType,
@@ -103,7 +139,7 @@ export default function DriverDetailPage() {
         status: formData.status,
       })
 
-      const updated = getDriverById(driverId)
+      const updated = await getDriverById(driverId)
       if (updated) {
         setDriver(updated)
       }
@@ -405,18 +441,16 @@ export default function DriverDetailPage() {
               <CardTitle>位置信息</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="aspect-video bg-muted/50 rounded-lg flex items-center justify-center border border-border/50">
-                <div className="text-center text-muted-foreground">
-                  <MapPin className="w-8 h-8 mx-auto mb-2" />
-                  <p className="text-sm">地图功能</p>
-                  <p className="text-xs">需接入高德地图API</p>
-                </div>
-              </div>
-              {driver.currentLat && driver.currentLng && (
-                <p className="text-xs text-muted-foreground mt-2">
-                  坐标: {driver.currentLat.toFixed(4)}, {driver.currentLng.toFixed(4)}
-                </p>
-              )}
+              <div
+                ref={mapRef}
+                className="w-full rounded-lg overflow-hidden border border-border/50"
+                style={{ height: 240 }}
+              />
+              <p className="text-xs text-muted-foreground mt-2">
+                {driver.currentLat && driver.currentLng
+                  ? `实时位置: ${driver.currentLat.toFixed(4)}, ${driver.currentLng.toFixed(4)}`
+                  : `常驻地址: ${driver.homeAddress || '未设置'}`}
+              </p>
             </CardContent>
           </Card>
         </div>

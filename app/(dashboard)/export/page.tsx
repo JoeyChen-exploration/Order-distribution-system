@@ -22,18 +22,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field"
-import { store } from "@/lib/store"
+import { getOrders, getDrivers } from "@/lib/store"
 import { exportOrdersToCSV, exportBillingReport, exportDriversToCSV } from "@/lib/export-utils"
 import type { Order, Driver, OrderStatus } from "@/lib/types"
-
-const statusLabels: Record<OrderStatus, string> = {
-  pending: "待派单",
-  assigned: "已派单",
-  accepted: "已接单",
-  in_progress: "进行中",
-  completed: "已完成",
-  cancelled: "已取消",
-}
+import { ORDER_STATUS_LABELS } from "@/lib/types"
 
 export default function ExportPage() {
   const [orders, setOrders] = useState<Order[]>([])
@@ -50,14 +42,16 @@ export default function ExportPage() {
   const [billingDateEnd, setBillingDateEnd] = useState("")
   
   useEffect(() => {
-    setOrders(store.getOrders())
-    setDrivers(store.getDrivers())
-    
-    // Set default date range to current month
+    async function load() {
+      const [orderData, driverData] = await Promise.all([getOrders(), getDrivers()])
+      setOrders(orderData)
+      setDrivers(driverData)
+    }
+    load()
+
     const now = new Date()
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-    
     const formatDate = (d: Date) => d.toISOString().split("T")[0]
     setOrderDateStart(formatDate(firstDay))
     setOrderDateEnd(formatDate(lastDay))
@@ -67,34 +61,29 @@ export default function ExportPage() {
   
   const filteredOrdersPreview = useMemo(() => {
     let filtered = orders
-    
     if (orderDateStart && orderDateEnd) {
-      filtered = filtered.filter(o => 
-        o.serviceDate >= orderDateStart && o.serviceDate <= orderDateEnd
+      filtered = filtered.filter(o =>
+        o.flightDate >= orderDateStart && o.flightDate <= orderDateEnd
       )
     }
-    
     if (orderStatusFilter !== "all") {
-      filtered = filtered.filter(o => o.status === orderStatusFilter)
+      filtered = filtered.filter(o => o.status === Number(orderStatusFilter))
     }
-    
     return filtered
   }, [orders, orderDateStart, orderDateEnd, orderStatusFilter])
-  
+
   const billingPreview = useMemo(() => {
     const completedOrders = orders.filter(
-      o => o.status === "completed" &&
-      o.serviceDate >= billingDateStart &&
-      o.serviceDate <= billingDateEnd
+      o => o.status === 3 &&
+        o.flightDate >= billingDateStart &&
+        o.flightDate <= billingDateEnd
     )
-    
     const driverCount = new Set(completedOrders.map(o => o.driverId).filter(Boolean)).size
-    
     return {
       orderCount: completedOrders.length,
       driverCount,
-      pickupCount: completedOrders.filter(o => o.serviceType === "pickup").length,
-      dropoffCount: completedOrders.filter(o => o.serviceType === "dropoff").length,
+      pickupCount: 0,
+      dropoffCount: 0,
     }
   }, [orders, billingDateStart, billingDateEnd])
   
@@ -174,7 +163,7 @@ export default function ExportPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">全部状态</SelectItem>
-                    {Object.entries(statusLabels).map(([key, label]) => (
+                    {Object.entries(ORDER_STATUS_LABELS).map(([key, label]) => (
                       <SelectItem key={key} value={key}>{label}</SelectItem>
                     ))}
                   </SelectContent>

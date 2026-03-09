@@ -47,15 +47,15 @@ import {
 import { Progress } from "@/components/ui/progress"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { store } from "@/lib/store"
+import { getOrders, getDrivers, updateOrder, updateDriver } from "@/lib/store"
 import { runDispatchAlgorithm, batchDispatch, type DispatchScore, type DispatchResult } from "@/lib/dispatch-engine"
 import type { Order, Driver } from "@/lib/types"
 
 const vehicleTypeLabels: Record<string, string> = {
-  sedan: "轿车",
-  suv: "SUV",
-  van: "商务车",
-  luxury: "豪华车",
+  "舒适型": "舒适型",
+  "豪华型": "豪华型",
+  "商务型": "商务型",
+  "经济型": "经济型",
 }
 
 const serviceTypeLabels: Record<string, string> = {
@@ -79,32 +79,30 @@ export default function DispatchPage() {
   const [dateFilter, setDateFilter] = useState("")
   
   useEffect(() => {
-    const orders = store.getOrders()
-    const driverList = store.getDrivers()
-    
-    setAllOrders(orders)
-    setDrivers(driverList)
-    
-    // Get pending orders or orders that need reassignment
-    if (isReassign && preselectedOrderId) {
-      const orderToReassign = orders.find(o => o.id === preselectedOrderId)
-      if (orderToReassign) {
-        setPendingOrders([orderToReassign])
-        setSelectedOrders(new Set([preselectedOrderId]))
-      }
-    } else {
-      const pending = orders.filter(o => o.status === "pending")
-      setPendingOrders(pending)
-      
-      if (preselectedOrderId) {
-        setSelectedOrders(new Set([preselectedOrderId]))
+    async function load() {
+      const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
+      setAllOrders(orders)
+      setDrivers(driverList)
+      if (isReassign && preselectedOrderId) {
+        const orderToReassign = orders.find(o => o.id === preselectedOrderId)
+        if (orderToReassign) {
+          setPendingOrders([orderToReassign])
+          setSelectedOrders(new Set([preselectedOrderId]))
+        }
+      } else {
+        const pending = orders.filter(o => o.status === 0)
+        setPendingOrders(pending)
+        if (preselectedOrderId) {
+          setSelectedOrders(new Set([preselectedOrderId]))
+        }
       }
     }
+    load()
   }, [preselectedOrderId, isReassign])
   
   const filteredOrders = useMemo(() => {
     if (!dateFilter) return pendingOrders
-    return pendingOrders.filter(o => o.serviceDate === dateFilter)
+    return pendingOrders.filter(o => o.flightDate === dateFilter)
   }, [pendingOrders, dateFilter])
   
   const stats = useMemo(() => {
@@ -157,35 +155,23 @@ export default function DispatchPage() {
     setIsProcessing(false)
   }
   
-  const handleConfirmDispatch = (orderId: string, driverId: string) => {
-    // Update driver status
-    store.updateDriver(driverId, { status: "busy" })
-    
-    // Update order
-    store.updateOrder(orderId, { 
-      driverId,
-      status: "assigned",
-    })
-    
-    // Refresh data
-    const orders = store.getOrders()
-    const driverList = store.getDrivers()
+  const handleConfirmDispatch = async (orderId: string, driverId: string) => {
+    await updateDriver(driverId, { status: "busy" })
+    await updateOrder(orderId, { driverId, status: 1 })
+
+    const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
     setAllOrders(orders)
     setDrivers(driverList)
-    setPendingOrders(orders.filter(o => o.status === "pending"))
-    
-    // Clear selection
+    setPendingOrders(orders.filter(o => o.status === 0))
+
     const newSelected = new Set(selectedOrders)
     newSelected.delete(orderId)
     setSelectedOrders(newSelected)
-    
-    // Close dialog if single dispatch
+
     if (currentResult?.orderId === orderId) {
       setShowResultDialog(false)
       setCurrentResult(null)
     }
-    
-    // Update batch results
     if (batchResults) {
       const newResults = new Map(batchResults)
       newResults.delete(orderId)
@@ -295,9 +281,9 @@ export default function DispatchPage() {
                     >
                       <div className="flex items-center gap-4">
                         <div>
-                          <p className="font-medium">{order.orderNumber}</p>
+                          <p className="font-medium">{order.orderNo}</p>
                           <p className="text-xs text-muted-foreground">
-                            {order.serviceDate} {order.serviceTime} · {serviceTypeLabels[order.serviceType]}
+                            {order.flightDate} {order.pickupTime} · {order.flightNo}
                           </p>
                         </div>
                         <ArrowRight className="h-4 w-4 text-muted-foreground" />
@@ -374,7 +360,7 @@ export default function DispatchPage() {
                   />
                 </TableHead>
                 <TableHead>订单号</TableHead>
-                <TableHead>服务类型</TableHead>
+                <TableHead>航班号</TableHead>
                 <TableHead>乘客</TableHead>
                 <TableHead>服务时间</TableHead>
                 <TableHead>地点</TableHead>
@@ -400,29 +386,25 @@ export default function DispatchPage() {
                         }
                       />
                     </TableCell>
-                    <TableCell className="font-medium">{order.orderNumber}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {serviceTypeLabels[order.serviceType]}
-                      </Badge>
-                    </TableCell>
+                    <TableCell className="font-medium">{order.orderNo}</TableCell>
+                    <TableCell>{order.flightNo}</TableCell>
                     <TableCell>{order.passengerName}</TableCell>
                     <TableCell>
                       <div className="flex flex-col">
-                        <span>{order.serviceDate}</span>
-                        <span className="text-xs text-muted-foreground">{order.serviceTime}</span>
+                        <span>{order.flightDate}</span>
+                        <span className="text-xs text-muted-foreground">{order.pickupTime}</span>
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="max-w-[200px]">
-                        <p className="truncate text-xs" title={order.pickupLocation}>
-                          {order.pickupLocation}
+                        <p className="truncate text-xs" title={order.pickupAddress}>
+                          {order.pickupAddress}
                         </p>
                       </div>
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary">
-                        {vehicleTypeLabels[order.vehicleType]}
+                        {vehicleTypeLabels[order.reqVehicleType]}
                       </Badge>
                     </TableCell>
                     <TableCell>

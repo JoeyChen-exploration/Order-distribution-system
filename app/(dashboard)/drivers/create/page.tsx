@@ -25,7 +25,7 @@ export default function CreateDriverPage() {
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
-    vehicleType: 'sedan' as VehicleType,
+    vehicleType: '舒适型' as VehicleType,
     vehiclePlate: '',
     homeAddress: '',
     homeLat: 39.9042,

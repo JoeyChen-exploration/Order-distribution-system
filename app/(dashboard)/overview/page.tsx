@@ -94,13 +94,15 @@ export default function OverviewPage() {
   const [recentOrders, setRecentOrders] = useState<Order[]>([])
 
   useEffect(() => {
-    setStats(getDashboardStats())
-    const orders = getOrders()
-    // 按创建时间倒序，取最近5条
-    const sorted = [...orders].sort((a, b) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )
-    setRecentOrders(sorted.slice(0, 5))
+    async function load() {
+      const [statsData, orders] = await Promise.all([getDashboardStats(), getOrders()])
+      setStats(statsData)
+      const sorted = [...orders].sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )
+      setRecentOrders(sorted.slice(0, 5))
+    }
+    load()
   }, [])
 
   if (!stats) {

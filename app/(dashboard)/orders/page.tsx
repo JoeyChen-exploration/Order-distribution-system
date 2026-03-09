@@ -57,10 +57,10 @@ const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "s
 }
 
 const vehicleTypeLabels: Record<string, string> = {
-  sedan: "轿车",
-  suv: "SUV",
-  mpv: "商务车",
-  van: "面包车",
+  "舒适型": "舒适型",
+  "豪华型": "豪华型",
+  "商务型": "商务型",
+  "经济型": "经济型",
 }
 
 export default function OrdersPage() {
@@ -74,8 +74,12 @@ export default function OrdersPage() {
   const pageSize = 10
 
   useEffect(() => {
-    setOrders(getOrders())
-    setDrivers(getDrivers().map((d) => ({ id: d.id, name: d.name })))
+    async function load() {
+      const [orderData, driverData] = await Promise.all([getOrders(), getDrivers()])
+      setOrders(orderData)
+      setDrivers(driverData.map((d) => ({ id: d.id, name: d.name })))
+    }
+    load()
   }, [])
 
   const filteredOrders = useMemo(() => {
@@ -117,9 +121,9 @@ export default function OrdersPage() {
     return driver?.name || "-"
   }
 
-  const handleCancelOrder = (orderId: string) => {
-    updateOrder(orderId, { status: 4 })
-    setOrders(getOrders())
+  const handleCancelOrder = async (orderId: string) => {
+    await updateOrder(orderId, { status: 4 })
+    setOrders(await getOrders())
   }
 
   const clearFilters = () => {

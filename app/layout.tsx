@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import Script from 'next/script'
 import { AuthProvider } from '@/lib/auth-context'
 import './globals.css'
 
@@ -42,6 +43,10 @@ export default function RootLayout({
           {children}
         </AuthProvider>
         <Analytics />
+        <Script
+          src="https://webapi.amap.com/maps?v=2.0&key=bf723ca7b7f66c70edd62552e1521087"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   )

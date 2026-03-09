@@ -10,13 +10,13 @@ export interface User {
 }
 
 // 车辆类型
-export type VehicleType = 'sedan' | 'suv' | 'mpv' | 'van'
+export type VehicleType = '舒适型' | '豪华型' | '商务型' | '经济型'
 
 export const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
-  sedan: '轿车',
-  suv: 'SUV',
-  mpv: '商务车',
-  van: '面包车',
+  '舒适型': '舒适型',
+  '豪华型': '豪华型',
+  '商务型': '商务型',
+  '经济型': '经济型',
 }
 
 // 司机状态
@@ -93,7 +93,7 @@ export interface Order {
   cancelTime?: string
   modifiedUserId?: string
   modifiedAt?: string
-  importBatchId: string
+  importBatchId: string | null
   createdAt: string
   updatedAt: string
 }

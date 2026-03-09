@@ -25,73 +25,62 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
-import { store } from "@/lib/store"
-import type { Order, VehicleType, ServiceType } from "@/lib/types"
+import { createOrder } from "@/lib/store"
+
 
 interface ParsedRow {
   rowIndex: number
-  data: Partial<Order>
+  data: Record<string, string | number | boolean>
   errors: string[]
   isValid: boolean
 }
 
-const requiredFields = [
-  { key: "passengerName", label: "乘客姓名" },
-  { key: "passengerPhone", label: "联系电话" },
-  { key: "serviceType", label: "服务类型" },
-  { key: "serviceDate", label: "服务日期" },
-  { key: "serviceTime", label: "服务时间" },
-  { key: "pickupLocation", label: "上车地点" },
-  { key: "dropoffLocation", label: "下车地点" },
-  { key: "vehicleType", label: "车型" },
-]
-
+// 列名映射：中文表头 -> 字段名
+// 对应礼宾车账单 Excel 格式（列 A-AF）
 const fieldMapping: Record<string, string> = {
-  "乘客姓名": "passengerName",
-  "姓名": "passengerName",
-  "联系电话": "passengerPhone",
-  "电话": "passengerPhone",
-  "手机": "passengerPhone",
+  // 核心订单字段
+  "订单号": "orderNo",
+  "预订车型": "reqVehicleType",
   "服务类型": "serviceType",
-  "类型": "serviceType",
-  "服务日期": "serviceDate",
-  "日期": "serviceDate",
-  "服务时间": "serviceTime",
-  "时间": "serviceTime",
-  "上车地点": "pickupLocation",
-  "接机地点": "pickupLocation",
-  "出发地": "pickupLocation",
-  "下车地点": "dropoffLocation",
-  "送机地点": "dropoffLocation",
-  "目的地": "dropoffLocation",
-  "车型": "vehicleType",
-  "车辆类型": "vehicleType",
-  "航班号": "flightNumber",
-  "航班": "flightNumber",
-  "乘客人数": "passengerCount",
+  "服务城市": "serviceCity",
+  "服务日期": "flightDate",
+  "三字码": "airportCode",
   "人数": "passengerCount",
-  "行李数量": "luggageCount",
-  "行李": "luggageCount",
-  "备注": "notes",
-  "特殊要求": "specialRequirements",
+  "下单时间": "submittedAt",
+  "航班号": "flightNo",
+  "上车点": "pickupAddress",
+  "下车点": "dropoffAddress",
+  "车号": "vehiclePlate",
+  // 司机信息
+  "司机": "driverName",
+  "司机电话": "driverPhone",
+  "司机分组": "driverGroup",
+  "实际车型": "actualVehicleType",
+  "架次": "tripNo",
+  // 费用字段
+  "公里数": "kilometers",
+  "货币": "currency",
+  "超公里费": "extraKmFee",
+  "夜间服务费": "nightFee",
+  "婴儿床费用": "babyBedFee",
+  "儿童座椅费用": "childSeatFee",
+  "单程费": "singleTripFee",
+  "上下车点": "pickupDropoffPoint",
+  "节假日调价": "holidayAdjustment",
+  "自主调价": "selfAdjustment",
+  // 其他
+  "供应商订单": "supplierOrderNo",
+  "服务标准": "serviceStandard",
+  "单程服务": "singleService",
+  "备注": "remarks",
 }
 
-const serviceTypeMapping: Record<string, ServiceType> = {
-  "接机": "pickup",
-  "pickup": "pickup",
-  "送机": "dropoff",
-  "dropoff": "dropoff",
-}
-
-const vehicleTypeMapping: Record<string, VehicleType> = {
-  "轿车": "sedan",
-  "sedan": "sedan",
-  "SUV": "suv",
-  "suv": "suv",
-  "商务车": "van",
-  "van": "van",
-  "豪华车": "luxury",
-  "luxury": "luxury",
+const vehicleTypeMapping: Record<string, string> = {
+  // 标准名称直接保留
+  "舒适型": "舒适型",
+  "豪华型": "豪华型",
+  "商务型": "商务型",
+  "经济型": "经济型",
 }
 
 export default function OrderImportPage() {
@@ -100,207 +89,163 @@ export default function OrderImportPage() {
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [importProgress, setImportProgress] = useState(0)
-  const [importResult, setImportResult] = useState<{
-    success: number
-    failed: number
-    batchId?: string
-  } | null>(null)
+  const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null)
 
   const parseCSV = (text: string): string[][] => {
-    const lines = text.split(/\r?\n/).filter(line => line.trim())
+    const lines = text.split(/\r?\n/).filter(l => l.trim())
     return lines.map(line => {
       const result: string[] = []
       let current = ""
       let inQuotes = false
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i]
-        if (char === '"') {
-          inQuotes = !inQuotes
-        } else if (char === "," && !inQuotes) {
-          result.push(current.trim())
-          current = ""
-        } else {
-          current += char
-        }
+      for (const char of line) {
+        if (char === '"') { inQuotes = !inQuotes }
+        else if (char === "," && !inQuotes) { result.push(current.trim()); current = "" }
+        else { current += char }
       }
       result.push(current.trim())
       return result
     })
   }
 
-  const validateRow = (row: Partial<Order>, rowIndex: number): ParsedRow => {
+  const validateRow = (data: Record<string, string | number | boolean>, rowIndex: number): ParsedRow => {
     const errors: string[] = []
-    
-    // Check required fields
-    requiredFields.forEach(field => {
-      if (!row[field.key as keyof Order]) {
-        errors.push(`缺少必填字段：${field.label}`)
-      }
-    })
-    
-    // Validate phone number
-    if (row.passengerPhone && !/^1[3-9]\d{9}$/.test(row.passengerPhone)) {
-      errors.push("手机号格式不正确")
+
+    if (!data.orderNo) errors.push("缺少订单号")
+    if (!data.flightDate) errors.push("缺少服务日期")
+    if (!data.pickupAddress) errors.push("缺少上车点")
+    if (!data.dropoffAddress) errors.push("缺少下车点")
+    if (!data.reqVehicleType) errors.push("缺少预订车型")
+
+    if (data.flightDate && !/^\d{4}-\d{2}-\d{2}/.test(String(data.flightDate))) {
+      errors.push("服务日期格式不正确，应为 YYYY-MM-DD")
     }
-    
-    // Validate date format
-    if (row.serviceDate && !/^\d{4}-\d{2}-\d{2}$/.test(row.serviceDate)) {
-      errors.push("日期格式不正确，应为YYYY-MM-DD")
+    if (data.reqVehicleType && !["舒适型", "豪华型", "商务型", "经济型"].includes(String(data.reqVehicleType))) {
+      errors.push(`车型无效："${data.reqVehicleType}"，应为 舒适型/豪华型/商务型/经济型`)
     }
-    
-    // Validate time format
-    if (row.serviceTime && !/^\d{2}:\d{2}$/.test(row.serviceTime)) {
-      errors.push("时间格式不正确，应为HH:MM")
-    }
-    
-    // Validate service type
-    if (row.serviceType && !["pickup", "dropoff"].includes(row.serviceType)) {
-      errors.push("服务类型无效，应为"接机"或"送机"")
-    }
-    
-    // Validate vehicle type
-    if (row.vehicleType && !["sedan", "suv", "van", "luxury"].includes(row.vehicleType)) {
-      errors.push("车型无效")
-    }
-    
-    return {
-      rowIndex,
-      data: row,
-      errors,
-      isValid: errors.length === 0,
-    }
+
+    return { rowIndex, data, errors, isValid: errors.length === 0 }
   }
 
-  const processFile = useCallback(async (file: File) => {
+  const processFile = useCallback(async (f: File) => {
     setIsProcessing(true)
     setImportResult(null)
-    
     try {
-      const text = await file.text()
+      const text = await f.text()
       const rows = parseCSV(text)
-      
-      if (rows.length < 2) {
-        throw new Error("文件内容不足，至少需要包含表头和一行数据")
-      }
-      
+      if (rows.length < 2) throw new Error("文件内容不足")
+
       const headers = rows[0]
       const mappedHeaders = headers.map(h => fieldMapping[h] || h)
-      
+
       const parsed: ParsedRow[] = []
-      
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i]
-        const rowData: Partial<Order> = {}
-        
-        mappedHeaders.forEach((header, index) => {
-          let value = row[index] || ""
-          
-          // Convert service type
-          if (header === "serviceType") {
-            value = serviceTypeMapping[value] || value
-          }
-          
-          // Convert vehicle type
-          if (header === "vehicleType") {
-            value = vehicleTypeMapping[value] || value
-          }
-          
-          // Convert numbers
-          if (["passengerCount", "luggageCount"].includes(header)) {
-            const num = parseInt(value)
-            if (!isNaN(num)) {
-              (rowData as Record<string, unknown>)[header] = num
-              return
-            }
-          }
-          
-          if (value) {
-            (rowData as Record<string, unknown>)[header] = value
-          }
+        // Skip completely empty rows
+        if (row.every(cell => !cell.trim())) continue
+
+        const data: Record<string, string | number | boolean> = {}
+        mappedHeaders.forEach((header, idx) => {
+          let value = row[idx]?.trim() || ""
+          if (header === "reqVehicleType") value = vehicleTypeMapping[value] || value
+          if (value) data[header] = value
         })
-        
-        parsed.push(validateRow(rowData, i))
+
+        // Normalize flightDate: take only date part if datetime is given
+        if (data.flightDate) {
+          data.flightDate = String(data.flightDate).slice(0, 10)
+        }
+
+        parsed.push(validateRow(data, i))
       }
-      
       setParsedRows(parsed)
-    } catch (error) {
-      console.error("Parse error:", error)
+    } catch (e) {
+      console.error(e)
     } finally {
       setIsProcessing(false)
     }
   }, [])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0]
-    if (selectedFile) {
-      setFile(selectedFile)
-      processFile(selectedFile)
-    }
+    const f = e.target.files?.[0]
+    if (f) { setFile(f); processFile(f) }
   }
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    const droppedFile = e.dataTransfer.files[0]
-    if (droppedFile && (droppedFile.name.endsWith(".csv") || droppedFile.name.endsWith(".xlsx"))) {
-      setFile(droppedFile)
-      processFile(droppedFile)
+    const f = e.dataTransfer.files[0]
+    if (f && (f.name.endsWith(".csv") || f.name.endsWith(".xlsx"))) {
+      setFile(f); processFile(f)
     }
   }
 
   const handleImport = async () => {
-    const validRows = parsedRows.filter(r => r.isValid)
-    if (validRows.length === 0) return
-    
+    const valid = parsedRows.filter(r => r.isValid)
+    if (valid.length === 0) return
     setIsProcessing(true)
     setImportProgress(0)
-    
-    const batchId = `BATCH-${Date.now()}`
-    let successCount = 0
-    let failedCount = 0
-    
-    for (let i = 0; i < validRows.length; i++) {
+
+    let success = 0
+    let failed = 0
+
+    for (let i = 0; i < valid.length; i++) {
       try {
-        const orderData = {
-          ...validRows[i].data,
-          passengerCount: validRows[i].data.passengerCount || 1,
-          luggageCount: validRows[i].data.luggageCount || 0,
-          importBatchId: batchId,
-        } as Omit<Order, "id" | "orderNumber" | "status" | "createdAt" | "updatedAt">
-        
-        store.addOrder(orderData)
-        successCount++
+        const d = valid[i].data
+        await createOrder({
+          orderNo: String(d.orderNo || `IMP-${Date.now()}-${i}`),
+          passengerName: String(d.passengerName || ""),
+          passengerPhone: String(d.passengerPhone || ""),
+          flightNo: String(d.flightNo || ""),
+          flightDate: String(d.flightDate || ""),
+          pickupTime: String(d.pickupTime || ""),
+          pickupAddress: String(d.pickupAddress || ""),
+          pickupLat: 0,
+          pickupLng: 0,
+          dropoffAddress: String(d.dropoffAddress || ""),
+          dropoffLat: 0,
+          dropoffLng: 0,
+          reqVehicleType: String(d.reqVehicleType || "舒适型") as "舒适型" | "豪华型" | "商务型" | "经济型",
+          status: 0,
+          driverName: d.driverName ? String(d.driverName) : undefined,
+          isEmergency: Boolean(d.isEmergency),
+          importBatchId: null,
+        })
+        success++
       } catch {
-        failedCount++
+        failed++
       }
-      
-      setImportProgress(Math.round(((i + 1) / validRows.length) * 100))
-      await new Promise(resolve => setTimeout(resolve, 50))
+      setImportProgress(Math.round(((i + 1) / valid.length) * 100))
+      await new Promise(r => setTimeout(r, 30))
     }
-    
-    setImportResult({
-      success: successCount,
-      failed: failedCount,
-      batchId,
-    })
+
+    setImportResult({ success, failed })
     setIsProcessing(false)
   }
 
   const downloadTemplate = () => {
-    const headers = ["乘客姓名", "联系电话", "服务类型", "服务日期", "服务时间", "上车地点", "下车地点", "车型", "航班号", "乘客人数", "行李数量", "备注"]
-    const sampleData = [
-      ["张三", "13800138001", "接机", "2026-03-15", "14:30", "首都国际机场T3", "朝阳区CBD", "轿车", "CA1234", "2", "2", ""],
-      ["李四", "13900139001", "送机", "2026-03-16", "08:00", "海淀区中关村", "大兴国际机场", "SUV", "MU5678", "4", "4", "需要儿童座椅"],
+    const headers = [
+      "订单号", "预订车型", "服务类型", "服务城市", "服务日期",
+      "三字码", "人数", "下单时间", "航班号", "上车点", "下车点", "车号",
+      "司机", "司机电话", "司机分组", "实际车型", "架次",
+      "公里数", "货币", "超公里费", "夜间服务费", "婴儿床费用", "儿童座椅费用",
+      "单程费", "上下车点", "节假日调价", "自主调价",
+      "供应商订单", "服务标准", "单程服务", "备注"
     ]
-    
-    const csvContent = [headers, ...sampleData].map(row => row.join(",")).join("\n")
-    const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8" })
-    const url = URL.createObjectURL(blob)
+    const sample = [
+      [
+        "CO20260306EXAMPLE", "舒适型", "接机/站", "上海市", "2026-03-06",
+        "PVG", "1", "2026-03-01 10:00:00", "MU5220",
+        "上海浦东国际机场-2号航站楼-P2停车楼",
+        "上海市徐汇区零陵路789弄之1-19号创世纪花园",
+        "", "", "", "", "", "",
+        "40", "CNY", "0", "0", "0", "0", "0", "0", "0", "0", "", "", "否", ""
+      ],
+    ]
+    const csv = [headers, ...sample].map(r => r.join(",")).join("\n")
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" })
     const a = document.createElement("a")
-    a.href = url
-    a.download = "订单导入模板.csv"
+    a.href = URL.createObjectURL(blob)
+    a.download = "礼宾车账单导入模板.csv"
     a.click()
-    URL.revokeObjectURL(url)
   }
 
   const validCount = parsedRows.filter(r => r.isValid).length
@@ -314,38 +259,28 @@ export default function OrderImportPage() {
         </Button>
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">导入订单</h1>
-          <p className="text-muted-foreground">批量导入 Excel/CSV 格式的订单数据</p>
+          <p className="text-muted-foreground">批量导入礼宾车账单 CSV 格式的订单数据</p>
         </div>
       </div>
 
-      {/* Import Result */}
       {importResult && (
         <Alert variant={importResult.failed > 0 ? "destructive" : "default"} className="border-primary/50">
           <CheckCircle2 className="h-4 w-4" />
           <AlertTitle>导入完成</AlertTitle>
           <AlertDescription>
-            成功导入 {importResult.success} 条订单
-            {importResult.failed > 0 && `，失败 ${importResult.failed} 条`}
-            。批次号：{importResult.batchId}
+            成功导入 {importResult.success} 条订单{importResult.failed > 0 && `，失败 ${importResult.failed} 条`}
           </AlertDescription>
           <div className="mt-4 flex gap-2">
-            <Button size="sm" onClick={() => router.push("/orders")}>
-              查看订单列表
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => router.push("/dispatch")}>
-              前往派单
-            </Button>
+            <Button size="sm" onClick={() => router.push("/orders")}>查看订单列表</Button>
+            <Button size="sm" variant="outline" onClick={() => router.push("/dispatch")}>前往派单</Button>
           </div>
         </Alert>
       )}
 
-      {/* Upload Area */}
       <Card>
         <CardHeader>
           <CardTitle>上传文件</CardTitle>
-          <CardDescription>
-            支持 CSV 格式文件，最大 10MB
-          </CardDescription>
+          <CardDescription>支持 CSV 格式文件，列格式参照礼宾车账单</CardDescription>
         </CardHeader>
         <CardContent>
           <div
@@ -354,31 +289,15 @@ export default function OrderImportPage() {
             onDragOver={(e) => e.preventDefault()}
             onClick={() => document.getElementById("file-input")?.click()}
           >
-            <input
-              id="file-input"
-              type="file"
-              accept=".csv,.xlsx"
-              className="hidden"
-              onChange={handleFileChange}
-            />
+            <input id="file-input" type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
             {file ? (
               <div className="flex items-center justify-center gap-3">
                 <FileSpreadsheet className="h-10 w-10 text-primary" />
                 <div className="text-left">
                   <p className="font-medium">{file.name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {(file.size / 1024).toFixed(2)} KB
-                  </p>
+                  <p className="text-sm text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</p>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setFile(null)
-                    setParsedRows([])
-                  }}
-                >
+                <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); setFile(null); setParsedRows([]) }}>
                   <X className="h-4 w-4" />
                 </Button>
               </div>
@@ -390,20 +309,18 @@ export default function OrderImportPage() {
               </>
             )}
           </div>
-          
           <div className="mt-4 flex items-center justify-between">
             <Button variant="outline" size="sm" onClick={downloadTemplate}>
               <Download className="mr-2 h-4 w-4" />
               下载导入模板
             </Button>
             <p className="text-xs text-muted-foreground">
-              字段：乘客姓名、联系电话、服务类型、服务日期、服务时间、上车地点、下车地点、车型、航班号（选填）
+              必填：订单号、服务日期、上车点、下车点、预订车型
             </p>
           </div>
         </CardContent>
       </Card>
 
-      {/* Preview */}
       {parsedRows.length > 0 && (
         <Card>
           <CardHeader>
@@ -411,11 +328,9 @@ export default function OrderImportPage() {
               <div>
                 <CardTitle>数据预览</CardTitle>
                 <CardDescription>
-                  共 {parsedRows.length} 条记录，
+                  共 {parsedRows.length} 条，
                   <span className="text-primary">{validCount} 条有效</span>
-                  {invalidCount > 0 && (
-                    <span className="text-destructive">，{invalidCount} 条有错误</span>
-                  )}
+                  {invalidCount > 0 && <span className="text-destructive">，{invalidCount} 条有错误</span>}
                 </CardDescription>
               </div>
               {isProcessing && importProgress > 0 && (
@@ -431,52 +346,41 @@ export default function OrderImportPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[60px]">行号</TableHead>
+                    <TableHead className="w-[50px]">行</TableHead>
                     <TableHead>状态</TableHead>
-                    <TableHead>乘客姓名</TableHead>
-                    <TableHead>联系电话</TableHead>
-                    <TableHead>服务类型</TableHead>
+                    <TableHead>订单号</TableHead>
+                    <TableHead>预订车型</TableHead>
                     <TableHead>服务日期</TableHead>
-                    <TableHead>服务时间</TableHead>
-                    <TableHead>车型</TableHead>
+                    <TableHead>航班号</TableHead>
+                    <TableHead>上车点</TableHead>
+                    <TableHead>下车点</TableHead>
+                    <TableHead>司机</TableHead>
                     <TableHead>错误信息</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {parsedRows.map((row) => (
-                    <TableRow 
-                      key={row.rowIndex}
-                      className={row.isValid ? "" : "bg-destructive/5"}
-                    >
+                    <TableRow key={row.rowIndex} className={row.isValid ? "" : "bg-destructive/5"}>
                       <TableCell>{row.rowIndex + 1}</TableCell>
                       <TableCell>
-                        {row.isValid ? (
-                          <CheckCircle2 className="h-4 w-4 text-primary" />
-                        ) : (
-                          <AlertCircle className="h-4 w-4 text-destructive" />
-                        )}
+                        {row.isValid
+                          ? <CheckCircle2 className="h-4 w-4 text-primary" />
+                          : <AlertCircle className="h-4 w-4 text-destructive" />}
                       </TableCell>
-                      <TableCell>{row.data.passengerName || "-"}</TableCell>
-                      <TableCell>{row.data.passengerPhone || "-"}</TableCell>
+                      <TableCell className="font-mono text-xs">{String(row.data.orderNo || "-")}</TableCell>
                       <TableCell>
-                        {row.data.serviceType === "pickup" ? "接机" : 
-                         row.data.serviceType === "dropoff" ? "送机" : "-"}
+                        {String(row.data.reqVehicleType || "-")}
                       </TableCell>
-                      <TableCell>{row.data.serviceDate || "-"}</TableCell>
-                      <TableCell>{row.data.serviceTime || "-"}</TableCell>
-                      <TableCell>
-                        {row.data.vehicleType === "sedan" ? "轿车" :
-                         row.data.vehicleType === "suv" ? "SUV" :
-                         row.data.vehicleType === "van" ? "商务车" :
-                         row.data.vehicleType === "luxury" ? "豪华车" : "-"}
-                      </TableCell>
+                      <TableCell>{String(row.data.flightDate || "-")}</TableCell>
+                      <TableCell>{String(row.data.flightNo || "-")}</TableCell>
+                      <TableCell className="max-w-[160px] truncate text-xs">{String(row.data.pickupAddress || "-")}</TableCell>
+                      <TableCell className="max-w-[160px] truncate text-xs">{String(row.data.dropoffAddress || "-")}</TableCell>
+                      <TableCell>{String(row.data.driverName || "-")}</TableCell>
                       <TableCell>
                         {row.errors.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             {row.errors.map((err, i) => (
-                              <Badge key={i} variant="destructive" className="text-xs">
-                                {err}
-                              </Badge>
+                              <Badge key={i} variant="destructive" className="text-xs">{err}</Badge>
                             ))}
                           </div>
                         )}
@@ -486,26 +390,12 @@ export default function OrderImportPage() {
                 </TableBody>
               </Table>
             </div>
-            
             <div className="mt-4 flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
-                仅导入有效数据，错误行将被跳过
-              </p>
-              <Button
-                onClick={handleImport}
-                disabled={validCount === 0 || isProcessing}
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    导入中...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-2 h-4 w-4" />
-                    导入 {validCount} 条订单
-                  </>
-                )}
+              <p className="text-sm text-muted-foreground">仅导入有效数据，错误行将被跳过</p>
+              <Button onClick={handleImport} disabled={validCount === 0 || isProcessing}>
+                {isProcessing
+                  ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />导入中...</>
+                  : <><Upload className="mr-2 h-4 w-4" />导入 {validCount} 条订单</>}
               </Button>
             </div>
           </CardContent>

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm add prisma @prisma/client xlsx)",
+      "Bash(pnpm add -D @types/xlsx)",
+      "Bash(npm install prisma @prisma/client xlsx)"
+    ]
+  }
+}

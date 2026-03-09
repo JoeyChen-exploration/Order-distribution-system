@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  role      String   @default("dispatcher") // super_admin | dispatcher
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[] @relation("ModifiedByUser")
+}
+
+model Driver {
+  id              String   @id @default(cuid())
+  name            String
+  phone           String   @unique
+  vehicleType     String   // sedan | suv | mpv | van
+  vehiclePlate    String   @unique
+  homeAddress     String
+  homeLat         Float
+  homeLng         Float
+  status          String   @default("available") // available | busy | off_duty | on_leave
+  dailyOrderCount Int      @default(0)
+  dailyOrderLimit Int      @default(10)
+  currentLat      Float?
+  currentLng      Float?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  orders Order[]
+}
+
+model Order {
+  id             String    @id @default(cuid())
+  orderNo        String    @unique
+  passengerName  String
+  passengerPhone String
+  flightNo       String
+  flightDate     String
+  pickupTime     String
+  pickupAddress  String
+  pickupLat      Float
+  pickupLng      Float
+  dropoffAddress String
+  dropoffLat     Float
+  dropoffLng     Float
+  reqVehicleType String
+  status         Int       @default(0) // 0待排单 1已分配 2进行中 3已完成 4已取消 5空单
+  isEmergency    Boolean   @default(false)
+  cancelReason   String?
+  cancelTime     String?
+  modifiedAt     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  driver         Driver?   @relation(fields: [driverId], references: [id])
+  driverId       String?
+  driverName     String?
+
+  modifiedByUser User?     @relation("ModifiedByUser", fields: [modifiedUserId], references: [id])
+  modifiedUserId String?
+
+  importBatch    ImportBatch? @relation(fields: [importBatchId], references: [id])
+  importBatchId  String?
+}
+
+model ImportBatch {
+  id          String   @id @default(cuid())
+  fileName    String
+  totalRows   Int
+  successRows Int
+  errorRows   Int
+  errors      String   @default("[]") // JSON string: [{row, field, message}]
+  importedBy  String
+  createdAt   DateTime @default(now())
+
+  orders Order[]
+}
