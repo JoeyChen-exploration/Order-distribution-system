@@ -18,6 +18,8 @@ import {
   ChevronDown,
   X,
   RefreshCw,
+  Trash2,
+  CalendarIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -45,7 +47,23 @@ import {
 } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { getOrders, getDrivers, updateOrder } from "@/lib/store"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { format } from "date-fns"
+import { zhCN } from "date-fns/locale"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { getOrders, getDrivers, updateOrder, deleteOrder } from "@/lib/store"
 import type { Order, OrderStatus } from "@/lib/types"
 
 const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -64,23 +82,37 @@ const vehicleTypeLabels: Record<string, string> = {
   "经济型": "经济型",
 }
 
+const vehicleTypeColors: Record<string, string> = {
+  "舒适型": "bg-blue-500",
+  "豪华型": "bg-amber-500",
+  "商务型": "bg-purple-500",
+  "经济型": "bg-green-500",
+}
+
 const METADATA_LABELS: Record<string, string> = {
   serviceType: "服务类型", serviceCity: "服务城市", airportCode: "三字码",
   passengerCount: "人数", submittedAt: "下单时间",
   vehiclePlate: "车号", driverPhone: "司机电话", driverGroup: "司机分组",
   actualVehicleType: "实际车型", tripNo: "架次",
-  kilometers: "公里数", currency: "货币", singleTripFee: "单程费",
-  extraKmFee: "超公里费", nightFee: "夜间服务费", babyBedFee: "婴儿床费用",
-  childSeatFee: "儿童座椅费用", holidayAdjustment: "节假日调价", selfAdjustment: "自主调价",
-  pickupDropoffPoint: "上下车点", supplierOrderNo: "供应商订单",
-  serviceStandard: "服务标准", singleService: "单程服务", remarks: "备注",
+  kilometers: "公里数", currency: "货币", singleTripFee: "单程费", signFee: "举牌费",
+  extraKmFee: "超公里费", nightFee: "夜间服务费", babyBedFee: "婴儿座椅费",
+  childSeatFee: "儿童座椅费", holidayAdjustment: "节假日调价", selfAdjustment: "自主调价",
+  pickupDropoffPoint: "上下车点费", supplierOrderNo: "供应商订单",
+  serviceStandard: "服务标准", signService: "举牌服务", singleService: "单程服务", remarks: "备注",
 }
 
+// 费用明细中始终展示的字段（无值显示0）
+const FEE_ALWAYS_SHOW = new Set([
+  "kilometers", "currency", "singleTripFee", "signFee", "extraKmFee",
+  "nightFee", "babyBedFee", "childSeatFee", "holidayAdjustment", "selfAdjustment",
+  "pickupDropoffPoint", "supplierOrderNo",
+])
+
 const METADATA_GROUPS = [
-  { label: "基本信息", keys: ["serviceType", "serviceCity", "airportCode", "passengerCount", "submittedAt"] },
-  { label: "费用明细", keys: ["kilometers", "currency", "singleTripFee", "extraKmFee", "nightFee", "babyBedFee", "childSeatFee", "holidayAdjustment", "selfAdjustment"] },
+  { label: "基本信息", keys: ["serviceCity", "airportCode", "submittedAt"] },
+  { label: "费用明细", keys: ["kilometers", "currency", "singleTripFee", "signFee", "extraKmFee", "nightFee", "babyBedFee", "childSeatFee", "holidayAdjustment", "selfAdjustment", "pickupDropoffPoint", "supplierOrderNo"] },
   { label: "司机/车辆", keys: ["vehiclePlate", "driverPhone", "driverGroup", "actualVehicleType", "tripNo"] },
-  { label: "其他", keys: ["pickupDropoffPoint", "supplierOrderNo", "serviceStandard", "singleService", "remarks"] },
+  { label: "其他", keys: ["signService", "singleService", "remarks"] },
 ]
 
 export default function OrdersPage() {
@@ -89,9 +121,13 @@ export default function OrdersPage() {
   const [drivers, setDrivers] = useState<{ id: string; name: string }[]>([])
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [dateFilter, setDateFilter] = useState("")
+  const [vehicleFilter, setVehicleFilter] = useState<string>("all")
+  const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined)
   const [currentPage, setCurrentPage] = useState(1)
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null)
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
   const pageSize = 10
 
   useEffect(() => {
@@ -104,19 +140,20 @@ export default function OrdersPage() {
   }, [])
 
   const filteredOrders = useMemo(() => {
+    const dateStr = dateFilter ? format(dateFilter, "yyyy-MM-dd") : ""
     return orders.filter(order => {
-      const matchesSearch =
-        order.orderNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        order.passengerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        order.passengerPhone.includes(searchQuery) ||
-        (order.flightNo && order.flightNo.toLowerCase().includes(searchQuery.toLowerCase()))
+      const q = searchQuery.toLowerCase()
+      const matchesSearch = !q ||
+        order.orderNo.toLowerCase().includes(q) ||
+        (order.flightNo && order.flightNo.toLowerCase().includes(q))
 
       const matchesStatus = statusFilter === "all" || order.status === Number(statusFilter)
-      const matchesDate = !dateFilter || order.flightDate === dateFilter
+      const matchesVehicle = vehicleFilter === "all" || order.reqVehicleType === vehicleFilter
+      const matchesDate = !dateStr || order.flightDate === dateStr
 
-      return matchesSearch && matchesStatus && matchesDate
+      return matchesSearch && matchesStatus && matchesVehicle && matchesDate
     })
-  }, [orders, searchQuery, statusFilter, dateFilter])
+  }, [orders, searchQuery, statusFilter, vehicleFilter, dateFilter])
 
   const paginatedOrders = useMemo(() => {
     const start = (currentPage - 1) * pageSize
@@ -147,14 +184,41 @@ export default function OrdersPage() {
     setOrders(await getOrders())
   }
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === paginatedOrders.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(paginatedOrders.map(o => o.id)))
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    for (const id of selectedIds) {
+      await deleteOrder(id)
+    }
+    setSelectedIds(new Set())
+    setBatchDeleteOpen(false)
+    setBatchMode(false)
+    setOrders(await getOrders())
+  }
+
   const clearFilters = () => {
     setSearchQuery("")
     setStatusFilter("all")
-    setDateFilter("")
+    setVehicleFilter("all")
+    setDateFilter(undefined)
     setCurrentPage(1)
   }
 
-  const hasActiveFilters = searchQuery || statusFilter !== "all" || dateFilter
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || vehicleFilter !== "all" || dateFilter
 
   return (
     <div className="flex flex-col gap-6">
@@ -164,6 +228,24 @@ export default function OrdersPage() {
           <p className="text-muted-foreground">管理所有接送机订单</p>
         </div>
         <div className="flex items-center gap-2">
+          {batchMode ? (
+            <>
+              {selectedIds.size > 0 && (
+                <Button variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  删除选中 ({selectedIds.size})
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => { setBatchMode(false); setSelectedIds(new Set()) }}>
+                取消
+              </Button>
+            </>
+          ) : (
+            <Button variant="outline" onClick={() => setBatchMode(true)}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              批量删除
+            </Button>
+          )}
           <Button variant="outline" asChild>
             <Link href="/orders/import">
               <Upload className="mr-2 h-4 w-4" />
@@ -226,7 +308,7 @@ export default function OrdersPage() {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="搜索订单号、乘客姓名、电话、航班号..."
+                placeholder="搜索订单号、航班号..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9"
@@ -234,7 +316,7 @@ export default function OrdersPage() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[130px]">
+                <SelectTrigger className="w-[120px]">
                   <SelectValue placeholder="订单状态" />
                 </SelectTrigger>
                 <SelectContent>
@@ -244,12 +326,42 @@ export default function OrdersPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Input
-                type="date"
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-                className="w-[160px]"
-              />
+              <Select value={vehicleFilter} onValueChange={setVehicleFilter}>
+                <SelectTrigger className="w-[110px]">
+                  <SelectValue placeholder="车型" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部车型</SelectItem>
+                  {Object.keys(vehicleTypeLabels).map(type => (
+                    <SelectItem key={type} value={type}>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${vehicleTypeColors[type]}`} />
+                        {type}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn("w-[150px] justify-start text-left font-normal", !dateFilter && "text-muted-foreground")}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateFilter ? format(dateFilter, "yyyy-MM-dd") : "选择日期"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={dateFilter}
+                    onSelect={setDateFilter}
+                    locale={zhCN}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
               {hasActiveFilters && (
                 <Button variant="ghost" size="sm" onClick={clearFilters}>
                   <X className="mr-1 h-4 w-4" />
@@ -267,11 +379,20 @@ export default function OrdersPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-[40px]">
+                  <Checkbox
+                    checked={paginatedOrders.length > 0 && selectedIds.size === paginatedOrders.length}
+                    onCheckedChange={toggleSelectAll}
+                    className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                  />
+                </TableHead>
                 <TableHead className="w-[180px]">订单号</TableHead>
-                <TableHead>乘客信息</TableHead>
                 <TableHead>航班/时间</TableHead>
                 <TableHead>地点</TableHead>
                 <TableHead>车型</TableHead>
+                <TableHead>服务标准</TableHead>
+                <TableHead>服务类型</TableHead>
+                <TableHead>人数</TableHead>
                 <TableHead>司机</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
@@ -280,7 +401,7 @@ export default function OrdersPage() {
             <TableBody>
               {paginatedOrders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
                     暂无订单数据
                   </TableCell>
                 </TableRow>
@@ -293,18 +414,19 @@ export default function OrdersPage() {
                     <React.Fragment key={order.id}>
                       <TableRow
                         className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
+                        onClick={() => !batchMode && setExpandedOrderId(isExpanded ? null : order.id)}
                       >
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={selectedIds.has(order.id)}
+                            onCheckedChange={() => toggleSelect(order.id)}
+                            className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                          />
+                        </TableCell>
                         <TableCell className="font-medium">
                           <div className="flex items-center gap-1.5">
                             <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`} />
                             <span className="truncate text-xs">{order.orderNo}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{order.passengerName || "-"}</span>
-                            <span className="text-xs text-muted-foreground">{order.passengerPhone || "-"}</span>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -326,7 +448,15 @@ export default function OrdersPage() {
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell>{vehicleTypeLabels[order.reqVehicleType] ?? order.reqVehicleType}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${vehicleTypeColors[order.reqVehicleType] ?? "bg-muted"}`} />
+                            {vehicleTypeLabels[order.reqVehicleType] ?? order.reqVehicleType}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-xs">{meta.serviceStandard || "-"}</TableCell>
+                        <TableCell className="text-xs">{meta.serviceType || "-"}</TableCell>
+                        <TableCell className="text-xs">{meta.passengerCount || "-"}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <User className="h-3 w-3 text-muted-foreground" />
@@ -382,13 +512,13 @@ export default function OrdersPage() {
                       </TableRow>
                       {isExpanded && (
                         <TableRow className="bg-muted/20 hover:bg-muted/20">
-                          <TableCell colSpan={8} className="px-6 pb-4 pt-0">
+                          <TableCell colSpan={11} className="px-6 pb-4 pt-0 max-w-0">
                             {hasExtra ? (
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-4 pt-3 border-t border-border/30">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-4 pt-3 border-t border-border/30 overflow-hidden">
                                 {METADATA_GROUPS.map(group => {
                                   const items = group.keys
-                                    .filter(k => meta[k])
-                                    .map(k => ({ label: METADATA_LABELS[k] ?? k, value: meta[k] }))
+                                    .filter(k => FEE_ALWAYS_SHOW.has(k) || meta[k])
+                                    .map(k => ({ label: METADATA_LABELS[k] ?? k, value: meta[k] ?? "0" }))
                                   if (items.length === 0) return null
                                   return (
                                     <div key={group.label}>
@@ -397,7 +527,7 @@ export default function OrdersPage() {
                                         {items.map(item => (
                                           <div key={item.label} className="flex justify-between text-xs gap-2">
                                             <dt className="text-muted-foreground shrink-0">{item.label}</dt>
-                                            <dd className="font-medium text-right">{item.value}</dd>
+                                            <dd className="font-medium text-right break-all">{item.value}</dd>
                                           </div>
                                         ))}
                                       </dl>
@@ -448,6 +578,22 @@ export default function OrdersPage() {
           </div>
         </div>
       )}
+      <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除确认</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除选中的 {selectedIds.size} 条订单吗？此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBatchDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

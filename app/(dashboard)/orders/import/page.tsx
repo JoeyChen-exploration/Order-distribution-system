@@ -66,6 +66,8 @@ const fieldMapping: Record<string, string> = {
   "婴儿床费用": "babyBedFee",
   "儿童座椅费用": "childSeatFee",
   "单程费": "singleTripFee",
+  "举牌费": "signFee",
+  "举牌服务": "signService",
   "上下车点": "pickupDropoffPoint",
   "节假日调价": "holidayAdjustment",
   "自主调价": "selfAdjustment",

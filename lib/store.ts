@@ -96,6 +96,10 @@ export async function assignOrder(orderId: string, driverId: string, userId: str
   return order
 }
 
+export async function deleteOrder(id: string): Promise<void> {
+  await fetch(`/api/orders/${id}`, { method: 'DELETE' })
+}
+
 export async function cancelOrder(orderId: string, reason: string): Promise<Order | null> {
   const order = await getOrderById(orderId)
   if (!order) return null
