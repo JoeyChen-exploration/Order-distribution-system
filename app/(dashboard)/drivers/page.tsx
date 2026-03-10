@@ -159,9 +159,11 @@ export default function DriversPage() {
   }
 
   const handleBatchDelete = async () => {
-    for (const id of selectedIds) {
-      await deleteDriver(id)
-    }
+    await fetch('/api/drivers/batch-delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: Array.from(selectedIds) }),
+    })
     setSelectedIds(new Set())
     setBatchDeleteOpen(false)
     await loadDrivers()
@@ -307,7 +309,7 @@ export default function DriversPage() {
                   </th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">司机信息</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">车辆信息</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">今日工作量</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">工作时间</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">状态</th>
                   <th className="text-right py-3 px-4 text-sm font-medium text-muted-foreground">操作</th>
                 </tr>
@@ -351,19 +353,9 @@ export default function DriversPage() {
                       </div>
                     </td>
                     <td className="py-3 px-4">
-                      <div className="flex items-center gap-2">
-                        <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary rounded-full transition-all"
-                            style={{
-                              width: `${Math.min((driver.dailyOrderCount / driver.dailyOrderLimit) * 100, 100)}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="text-sm text-muted-foreground">
-                          {driver.dailyOrderCount}/{driver.dailyOrderLimit}
-                        </span>
-                      </div>
+                      <span className="text-sm text-foreground font-mono">
+                        {driver.workingHours || '—'}
+                      </span>
                     </td>
                     <td className="py-3 px-4">
                       <Select
@@ -452,8 +444,7 @@ export default function DriversPage() {
               <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
                 <span>• 住（常驻区域）</span>
                 <span>• 班次</span>
-                <span>• 做单时间</span>
-                <span>• 日单上限（默认 10）</span>
+                <span>• 时间（如 05:00-18:00）</span>
               </div>
             </div>
 

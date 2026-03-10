@@ -44,7 +44,7 @@ export default function RootLayout({
         </AuthProvider>
         <Analytics />
         <Script
-          src="https://webapi.amap.com/maps?v=2.0&key=bf723ca7b7f66c70edd62552e1521087"
+          src="https://webapi.amap.com/maps?v=2.0&key=efbc2bbeb490a9181152755081092bbe&plugin=AMap.Geocoder"
           strategy="afterInteractive"
         />
       </body>

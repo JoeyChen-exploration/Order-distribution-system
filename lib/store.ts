@@ -9,7 +9,9 @@ export async function getDrivers(params?: { status?: string; vehicleType?: strin
   if (params?.status) query.set('status', params.status)
   if (params?.vehicleType) query.set('vehicleType', params.vehicleType)
   const res = await fetch(`/api/drivers?${query}`)
-  return res.json()
+  if (!res.ok) return []
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
 }
 
 export async function getDriverById(id: string): Promise<Driver | null> {

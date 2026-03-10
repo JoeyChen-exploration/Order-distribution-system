@@ -41,9 +41,9 @@ export interface Driver {
   homeLng: number
   status: DriverStatus
   dailyOrderCount: number
-  dailyOrderLimit: number
   currentLat?: number
   currentLng?: number
+  workingHours?: string
   createdAt: string
   updatedAt: string
 }

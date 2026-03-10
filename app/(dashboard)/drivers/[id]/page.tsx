@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -35,13 +35,9 @@ export default function DriverDetailPage() {
     vehicleType: '舒适型' as VehicleType,
     vehiclePlate: '',
     homeAddress: '',
-    dailyOrderLimit: 8,
     status: 'available' as DriverStatus,
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const mapRef = useRef<HTMLDivElement>(null)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mapInstanceRef = useRef<any>(null)
 
   useEffect(() => {
     async function load() {
@@ -54,7 +50,6 @@ export default function DriverDetailPage() {
           vehicleType: data.vehicleType,
           vehiclePlate: data.vehiclePlate,
           homeAddress: data.homeAddress,
-          dailyOrderLimit: data.dailyOrderLimit,
           status: data.status,
         })
       }
@@ -63,38 +58,6 @@ export default function DriverDetailPage() {
     load()
   }, [driverId])
 
-  // 初始化高德地图
-  useEffect(() => {
-    if (!driver || !mapRef.current) return
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const AMap = (window as any).AMap
-    if (!AMap) return
-
-    const lng = driver.currentLng || driver.homeLng || 121.4737
-    const lat = driver.currentLat || driver.homeLat || 31.2304
-
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.destroy()
-    }
-
-    const map = new AMap.Map(mapRef.current, {
-      zoom: 14,
-      center: [lng, lat],
-      mapStyle: 'amap://styles/dark',
-    })
-    mapInstanceRef.current = map
-
-    new AMap.Marker({
-      position: new AMap.LngLat(lng, lat),
-      title: driver.name,
-      map,
-    })
-
-    return () => {
-      map.destroy()
-      mapInstanceRef.current = null
-    }
-  }, [driver])
 
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
@@ -135,7 +98,6 @@ export default function DriverDetailPage() {
         vehicleType: formData.vehicleType,
         vehiclePlate: formData.vehiclePlate.toUpperCase(),
         homeAddress: formData.homeAddress,
-        dailyOrderLimit: formData.dailyOrderLimit,
         status: formData.status,
       })
 
@@ -256,19 +218,7 @@ export default function DriverDetailPage() {
                       {errors.homeAddress && <p className="text-sm text-destructive mt-1">{errors.homeAddress}</p>}
                     </Field>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <Field>
-                        <FieldLabel htmlFor="dailyOrderLimit">每日接单上限</FieldLabel>
-                        <Input
-                          id="dailyOrderLimit"
-                          type="number"
-                          min={1}
-                          max={20}
-                          value={formData.dailyOrderLimit}
-                          onChange={e => setFormData(prev => ({ ...prev, dailyOrderLimit: parseInt(e.target.value) || 8 }))}
-                        />
-                      </Field>
-                      <Field>
+                    <Field>
                         <FieldLabel htmlFor="status">当前状态</FieldLabel>
                         <Select
                           value={formData.status}
@@ -284,7 +234,6 @@ export default function DriverDetailPage() {
                           </SelectContent>
                         </Select>
                       </Field>
-                    </div>
                   </FieldGroup>
 
                   <div className="flex items-center gap-4 mt-6 pt-6 border-t border-border/50">
@@ -303,7 +252,6 @@ export default function DriverDetailPage() {
                           vehicleType: driver.vehicleType,
                           vehiclePlate: driver.vehiclePlate,
                           homeAddress: driver.homeAddress,
-                          dailyOrderLimit: driver.dailyOrderLimit,
                           status: driver.status,
                         })
                       }}
@@ -416,22 +364,12 @@ export default function DriverDetailPage() {
                   {DRIVER_STATUS_LABELS[driver.status]}
                 </span>
               </div>
-              <div>
-                <p className="text-sm text-muted-foreground mb-2">今日工作量</p>
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary rounded-full transition-all"
-                      style={{
-                        width: `${(driver.dailyOrderCount / driver.dailyOrderLimit) * 100}%`,
-                      }}
-                    />
-                  </div>
-                  <span className="text-sm font-medium text-foreground">
-                    {driver.dailyOrderCount}/{driver.dailyOrderLimit}
-                  </span>
+              {driver.workingHours && (
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">工作时间</p>
+                  <p className="text-sm font-mono font-medium text-foreground">{driver.workingHours}</p>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
 
@@ -441,16 +379,13 @@ export default function DriverDetailPage() {
               <CardTitle>位置信息</CardTitle>
             </CardHeader>
             <CardContent>
-              <div
-                ref={mapRef}
-                className="w-full rounded-lg overflow-hidden border border-border/50"
-                style={{ height: 240 }}
-              />
-              <p className="text-xs text-muted-foreground mt-2">
-                {driver.currentLat && driver.currentLng
-                  ? `实时位置: ${driver.currentLat.toFixed(4)}, ${driver.currentLng.toFixed(4)}`
-                  : `常驻地址: ${driver.homeAddress || '未设置'}`}
-              </p>
+              <div className="flex items-start gap-3">
+                <MapPin className="w-5 h-5 text-muted-foreground mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">常驻地址</p>
+                  <p className="text-foreground">{driver.homeAddress || '未设置'}</p>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>

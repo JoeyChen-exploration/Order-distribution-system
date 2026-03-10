@@ -30,7 +30,6 @@ export default function CreateDriverPage() {
     homeAddress: '',
     homeLat: 39.9042,
     homeLng: 116.4074,
-    dailyOrderLimit: 8,
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
 
@@ -77,7 +76,6 @@ export default function CreateDriverPage() {
         homeLng: formData.homeLng,
         status: 'available' as DriverStatus,
         dailyOrderCount: 0,
-        dailyOrderLimit: formData.dailyOrderLimit,
         currentLat: formData.homeLat,
         currentLng: formData.homeLng,
       })
@@ -175,18 +173,6 @@ export default function CreateDriverPage() {
                 {errors.homeAddress && <p className="text-sm text-destructive mt-1">{errors.homeAddress}</p>}
               </Field>
 
-              <Field>
-                <FieldLabel htmlFor="dailyOrderLimit">每日接单上限</FieldLabel>
-                <Input
-                  id="dailyOrderLimit"
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={formData.dailyOrderLimit}
-                  onChange={e => setFormData(prev => ({ ...prev, dailyOrderLimit: parseInt(e.target.value) || 8 }))}
-                />
-                <p className="text-xs text-muted-foreground mt-1">建议设置为 8 单/天</p>
-              </Field>
             </FieldGroup>
 
             <div className="flex items-center gap-4 mt-6 pt-6 border-t border-border/50">

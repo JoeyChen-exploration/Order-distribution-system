@@ -16,6 +16,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DateTimeClock } from '@/components/date-time-clock'
 import { useState } from 'react'
 
 const navItems = [
@@ -89,6 +90,13 @@ export function AppSidebar() {
           })}
         </ul>
       </nav>
+
+      {/* Date Time */}
+      {!collapsed && (
+        <div className="px-4 py-3 border-t border-sidebar-border">
+          <DateTimeClock />
+        </div>
+      )}
 
       {/* User Info */}
       <div className="p-3 border-t border-sidebar-border">

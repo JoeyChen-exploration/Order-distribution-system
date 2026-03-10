@@ -63,7 +63,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { getOrders, getDrivers, updateOrder, deleteOrder } from "@/lib/store"
+import { getOrders, getDrivers, updateOrder } from "@/lib/store"
 import type { Order, OrderStatus } from "@/lib/types"
 
 const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -201,9 +201,11 @@ export default function OrdersPage() {
   }
 
   const handleBatchDelete = async () => {
-    for (const id of selectedIds) {
-      await deleteOrder(id)
-    }
+    await fetch('/api/orders/batch-delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: Array.from(selectedIds) }),
+    })
     setSelectedIds(new Set())
     setBatchDeleteOpen(false)
     setBatchMode(false)

@@ -30,9 +30,9 @@ model Driver {
   homeLng         Float
   status          String   @default("available") // available | busy | off_duty | on_leave
   dailyOrderCount Int      @default(0)
-  dailyOrderLimit Int      @default(10)
   currentLat      Float?
   currentLng      Float?
+  workingHours    String?  // e.g. "05:00-18:00"
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -62,7 +62,7 @@ model Order {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  driver         Driver?   @relation(fields: [driverId], references: [id])
+  driver         Driver?   @relation(fields: [driverId], references: [id], onDelete: SetNull)
   driverId       String?
   driverName     String?
 
