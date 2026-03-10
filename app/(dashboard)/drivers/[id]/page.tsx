@@ -153,7 +153,7 @@ export default function DriverDetailPage() {
 
   if (!driver) {
     return (
-      <div className="p-6">
+      <div>
         <div className="animate-pulse space-y-4">
           <div className="h-8 w-32 bg-muted rounded" />
           <div className="h-64 bg-muted rounded-lg" />
@@ -163,7 +163,7 @@ export default function DriverDetailPage() {
   }
 
   return (
-    <div className="p-6">
+    <div>
       <div className="mb-6">
         <Link
           href="/drivers"

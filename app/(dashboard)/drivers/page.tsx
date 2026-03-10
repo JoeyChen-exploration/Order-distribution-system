@@ -40,6 +40,7 @@ import { getDrivers, updateDriver, deleteDriver } from '@/lib/store'
 import type { Driver, DriverStatus } from '@/lib/types'
 import { DRIVER_STATUS_LABELS, VEHICLE_TYPE_LABELS } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Plus,
   Search,
@@ -78,6 +79,9 @@ export default function DriversPage() {
   const [vehicleFilter, setVehicleFilter] = useState<string>('all')
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [driverToDelete, setDriverToDelete] = useState<Driver | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
+  const [batchMode, setBatchMode] = useState(false)
 
   // xlsx import state
   const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -138,6 +142,31 @@ export default function DriversPage() {
     setDeleteDialogOpen(true)
   }
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredDrivers.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredDrivers.map(d => d.id)))
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    for (const id of selectedIds) {
+      await deleteDriver(id)
+    }
+    setSelectedIds(new Set())
+    setBatchDeleteOpen(false)
+    await loadDrivers()
+  }
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
@@ -169,14 +198,41 @@ export default function DriversPage() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  const handleImportDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
+      setImportFile(file)
+      setImportResult(null)
+    }
+  }
+
   return (
-    <div className="p-6">
+    <div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">司机管理</h1>
           <p className="text-muted-foreground">管理司机档案和状态</p>
         </div>
         <div className="flex items-center gap-2">
+          {batchMode ? (
+            <>
+              {selectedIds.size > 0 && (
+                <Button variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  删除选中 ({selectedIds.size})
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => { setBatchMode(false); setSelectedIds(new Set()) }}>
+                取消
+              </Button>
+            </>
+          ) : (
+            <Button variant="outline" onClick={() => setBatchMode(true)}>
+              <Trash2 className="w-4 h-4 mr-2" />
+              批量删除
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
             <Upload className="w-4 h-4 mr-2" />
             导入 Excel
@@ -242,6 +298,13 @@ export default function DriversPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border/50">
+                  <th className="py-3 px-4 w-[40px]">
+                    <Checkbox
+                      checked={filteredDrivers.length > 0 && selectedIds.size === filteredDrivers.length}
+                      onCheckedChange={toggleSelectAll}
+                      className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                    />
+                  </th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">司机信息</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">车辆信息</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">今日工作量</th>
@@ -255,6 +318,13 @@ export default function DriversPage() {
                     key={driver.id}
                     className="border-b border-border/30 hover:bg-muted/30 transition-colors"
                   >
+                    <td className="py-3 px-4">
+                      <Checkbox
+                        checked={selectedIds.has(driver.id)}
+                        onCheckedChange={() => toggleSelect(driver.id)}
+                        className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                      />
+                    </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-medium">
@@ -347,7 +417,7 @@ export default function DriversPage() {
                 ))}
                 {filteredDrivers.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="py-12 text-center text-muted-foreground">
+                    <td colSpan={6} className="py-12 text-center text-muted-foreground">
                       暂无数据
                     </td>
                   </tr>
@@ -392,6 +462,9 @@ export default function DriversPage() {
               <div
                 className="border-2 border-dashed border-border/50 rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
                 onClick={() => fileInputRef.current?.click()}
+                onDrop={handleImportDrop}
+                onDragOver={(e) => e.preventDefault()}
+                onDragEnter={(e) => e.preventDefault()}
               >
                 <input
                   ref={fileInputRef}
@@ -463,6 +536,24 @@ export default function DriversPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 批量删除确认 */}
+      <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除确认</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除选中的 {selectedIds.size} 名司机吗？此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBatchDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 删除确认对话框 */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

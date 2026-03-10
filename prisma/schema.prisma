@@ -71,6 +71,8 @@ model Order {
 
   importBatch    ImportBatch? @relation(fields: [importBatchId], references: [id])
   importBatchId  String?
+
+  metadata       String?   // JSON: extra fields from xlsx import
 }
 
 model ImportBatch {

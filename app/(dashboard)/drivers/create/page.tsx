@@ -91,7 +91,7 @@ export default function CreateDriverPage() {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto">
       <div className="mb-6">
         <Link
           href="/drivers"

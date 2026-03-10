@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import React, { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -15,6 +15,7 @@ import {
   Car,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   X,
   RefreshCw,
 } from "lucide-react"
@@ -63,6 +64,25 @@ const vehicleTypeLabels: Record<string, string> = {
   "经济型": "经济型",
 }
 
+const METADATA_LABELS: Record<string, string> = {
+  serviceType: "服务类型", serviceCity: "服务城市", airportCode: "三字码",
+  passengerCount: "人数", submittedAt: "下单时间",
+  vehiclePlate: "车号", driverPhone: "司机电话", driverGroup: "司机分组",
+  actualVehicleType: "实际车型", tripNo: "架次",
+  kilometers: "公里数", currency: "货币", singleTripFee: "单程费",
+  extraKmFee: "超公里费", nightFee: "夜间服务费", babyBedFee: "婴儿床费用",
+  childSeatFee: "儿童座椅费用", holidayAdjustment: "节假日调价", selfAdjustment: "自主调价",
+  pickupDropoffPoint: "上下车点", supplierOrderNo: "供应商订单",
+  serviceStandard: "服务标准", singleService: "单程服务", remarks: "备注",
+}
+
+const METADATA_GROUPS = [
+  { label: "基本信息", keys: ["serviceType", "serviceCity", "airportCode", "passengerCount", "submittedAt"] },
+  { label: "费用明细", keys: ["kilometers", "currency", "singleTripFee", "extraKmFee", "nightFee", "babyBedFee", "childSeatFee", "holidayAdjustment", "selfAdjustment"] },
+  { label: "司机/车辆", keys: ["vehiclePlate", "driverPhone", "driverGroup", "actualVehicleType", "tripNo"] },
+  { label: "其他", keys: ["pickupDropoffPoint", "supplierOrderNo", "serviceStandard", "singleService", "remarks"] },
+]
+
 export default function OrdersPage() {
   const router = useRouter()
   const [orders, setOrders] = useState<Order[]>([])
@@ -71,6 +91,7 @@ export default function OrdersPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [dateFilter, setDateFilter] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null)
   const pageSize = 10
 
   useEffect(() => {
@@ -246,7 +267,7 @@ export default function OrdersPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>订单号</TableHead>
+                <TableHead className="w-[180px]">订单号</TableHead>
                 <TableHead>乘客信息</TableHead>
                 <TableHead>航班/时间</TableHead>
                 <TableHead>地点</TableHead>
@@ -264,101 +285,135 @@ export default function OrdersPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedOrders.map((order) => (
-                  <TableRow
-                    key={order.id}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => router.push(`/orders/${order.id}`)}
-                  >
-                    <TableCell className="font-medium">{order.orderNo}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{order.passengerName}</span>
-                        <span className="text-xs text-muted-foreground">{order.passengerPhone}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        {order.flightNo && (
-                          <span className="font-medium">{order.flightNo}</span>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {order.flightDate} {order.pickupTime}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col max-w-[200px]">
-                        <span className="truncate text-xs" title={order.pickupAddress}>
-                          <MapPin className="inline h-3 w-3 mr-1" />
-                          {order.pickupAddress}
-                        </span>
-                        <span className="truncate text-xs text-muted-foreground" title={order.dropoffAddress}>
-                          → {order.dropoffAddress}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>{vehicleTypeLabels[order.reqVehicleType] ?? order.reqVehicleType}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <User className="h-3 w-3 text-muted-foreground" />
-                        {getDriverName(order.driverId)}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={statusConfig[order.status].variant}>
-                        {statusConfig[order.status].label}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={(e) => {
-                            e.stopPropagation()
-                            router.push(`/orders/${order.id}`)
-                          }}>
-                            查看详情
-                          </DropdownMenuItem>
-                          {order.status === 0 && (
-                            <DropdownMenuItem onClick={(e) => {
-                              e.stopPropagation()
-                              router.push(`/dispatch?orderId=${order.id}`)
-                            }}>
-                              <RefreshCw className="mr-2 h-4 w-4" />
-                              派单
-                            </DropdownMenuItem>
-                          )}
-                          {(order.status === 1 || order.status === 2) && (
-                            <DropdownMenuItem onClick={(e) => {
-                              e.stopPropagation()
-                              router.push(`/dispatch?orderId=${order.id}&reassign=true`)
-                            }}>
-                              <RefreshCw className="mr-2 h-4 w-4" />
-                              改派
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuSeparator />
-                          {order.status !== 3 && order.status !== 4 && (
-                            <DropdownMenuItem
-                              className="text-destructive"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleCancelOrder(order.id)
-                              }}
-                            >
-                              取消订单
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
+                paginatedOrders.map((order) => {
+                  const isExpanded = expandedOrderId === order.id
+                  const meta: Record<string, string> = order.metadata ? JSON.parse(order.metadata) : {}
+                  const hasExtra = Object.keys(meta).length > 0
+                  return (
+                    <React.Fragment key={order.id}>
+                      <TableRow
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => setExpandedOrderId(isExpanded ? null : order.id)}
+                      >
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-1.5">
+                            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`} />
+                            <span className="truncate text-xs">{order.orderNo}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{order.passengerName || "-"}</span>
+                            <span className="text-xs text-muted-foreground">{order.passengerPhone || "-"}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col">
+                            {order.flightNo && <span className="font-medium">{order.flightNo}</span>}
+                            <span className="text-xs text-muted-foreground">
+                              {order.flightDate} {order.pickupTime}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col max-w-[200px]">
+                            <span className="truncate text-xs" title={order.pickupAddress}>
+                              <MapPin className="inline h-3 w-3 mr-1" />
+                              {order.pickupAddress}
+                            </span>
+                            <span className="truncate text-xs text-muted-foreground" title={order.dropoffAddress}>
+                              → {order.dropoffAddress}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{vehicleTypeLabels[order.reqVehicleType] ?? order.reqVehicleType}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <User className="h-3 w-3 text-muted-foreground" />
+                            {order.driverName || getDriverName(order.driverId)}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={statusConfig[order.status].variant}>
+                            {statusConfig[order.status].label}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              {order.status === 0 && (
+                                <DropdownMenuItem onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push(`/dispatch?orderId=${order.id}`)
+                                }}>
+                                  <RefreshCw className="mr-2 h-4 w-4" />
+                                  派单
+                                </DropdownMenuItem>
+                              )}
+                              {(order.status === 1 || order.status === 2) && (
+                                <DropdownMenuItem onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push(`/dispatch?orderId=${order.id}&reassign=true`)
+                                }}>
+                                  <RefreshCw className="mr-2 h-4 w-4" />
+                                  改派
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuSeparator />
+                              {order.status !== 3 && order.status !== 4 && (
+                                <DropdownMenuItem
+                                  className="text-destructive"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleCancelOrder(order.id)
+                                  }}
+                                >
+                                  取消订单
+                                </DropdownMenuItem>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded && (
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableCell colSpan={8} className="px-6 pb-4 pt-0">
+                            {hasExtra ? (
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-4 pt-3 border-t border-border/30">
+                                {METADATA_GROUPS.map(group => {
+                                  const items = group.keys
+                                    .filter(k => meta[k])
+                                    .map(k => ({ label: METADATA_LABELS[k] ?? k, value: meta[k] }))
+                                  if (items.length === 0) return null
+                                  return (
+                                    <div key={group.label}>
+                                      <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">{group.label}</p>
+                                      <dl className="space-y-1.5">
+                                        {items.map(item => (
+                                          <div key={item.label} className="flex justify-between text-xs gap-2">
+                                            <dt className="text-muted-foreground shrink-0">{item.label}</dt>
+                                            <dd className="font-medium text-right">{item.value}</dd>
+                                          </div>
+                                        ))}
+                                      </dl>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            ) : (
+                              <p className="pt-3 text-xs text-muted-foreground border-t border-border/30">暂无额外信息</p>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
+                  )
+                })
               )}
             </TableBody>
           </Table>

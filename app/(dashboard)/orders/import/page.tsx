@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
+import * as XLSX from "xlsx"
 import {
   Upload,
   FileSpreadsheet,
@@ -91,22 +92,6 @@ export default function OrderImportPage() {
   const [importProgress, setImportProgress] = useState(0)
   const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null)
 
-  const parseCSV = (text: string): string[][] => {
-    const lines = text.split(/\r?\n/).filter(l => l.trim())
-    return lines.map(line => {
-      const result: string[] = []
-      let current = ""
-      let inQuotes = false
-      for (const char of line) {
-        if (char === '"') { inQuotes = !inQuotes }
-        else if (char === "," && !inQuotes) { result.push(current.trim()); current = "" }
-        else { current += char }
-      }
-      result.push(current.trim())
-      return result
-    })
-  }
-
   const validateRow = (data: Record<string, string | number | boolean>, rowIndex: number): ParsedRow => {
     const errors: string[] = []
 
@@ -130,22 +115,33 @@ export default function OrderImportPage() {
     setIsProcessing(true)
     setImportResult(null)
     try {
-      const text = await f.text()
-      const rows = parseCSV(text)
+      const buffer = await f.arrayBuffer()
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      // header: 1 返回二维数组
+      const rows: (string | number | boolean | Date)[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+
       if (rows.length < 2) throw new Error("文件内容不足")
 
-      const headers = rows[0]
+      const headers = rows[0].map(h => String(h).trim())
       const mappedHeaders = headers.map(h => fieldMapping[h] || h)
 
       const parsed: ParsedRow[] = []
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i]
         // Skip completely empty rows
-        if (row.every(cell => !cell.trim())) continue
+        if (row.every(cell => String(cell).trim() === "")) continue
 
         const data: Record<string, string | number | boolean> = {}
         mappedHeaders.forEach((header, idx) => {
-          let value = row[idx]?.trim() || ""
+          const raw = row[idx]
+          let value: string
+          if (raw instanceof Date) {
+            // cellDates:true 时日期字段会是 Date 对象
+            value = raw.toISOString().slice(0, 10)
+          } else {
+            value = String(raw ?? "").trim()
+          }
           if (header === "reqVehicleType") value = vehicleTypeMapping[value] || value
           if (value) data[header] = value
         })
@@ -187,9 +183,22 @@ export default function OrderImportPage() {
     let success = 0
     let failed = 0
 
+    const CORE_FIELDS = new Set([
+      "orderNo", "reqVehicleType", "flightDate", "flightNo",
+      "pickupAddress", "dropoffAddress", "driverName",
+      "passengerName", "passengerPhone", "pickupTime", "isEmergency",
+    ])
+
     for (let i = 0; i < valid.length; i++) {
       try {
         const d = valid[i].data
+        // collect extra xlsx fields into metadata
+        const extra: Record<string, string> = {}
+        for (const [k, v] of Object.entries(d)) {
+          if (!CORE_FIELDS.has(k) && v !== "" && v !== undefined && v !== false) {
+            extra[k] = String(v)
+          }
+        }
         await createOrder({
           orderNo: String(d.orderNo || `IMP-${Date.now()}-${i}`),
           passengerName: String(d.passengerName || ""),
@@ -208,6 +217,7 @@ export default function OrderImportPage() {
           driverName: d.driverName ? String(d.driverName) : undefined,
           isEmergency: Boolean(d.isEmergency),
           importBatchId: null,
+          metadata: Object.keys(extra).length > 0 ? JSON.stringify(extra) : undefined,
         })
         success++
       } catch {
@@ -287,9 +297,10 @@ export default function OrderImportPage() {
             className="border-2 border-dashed rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer"
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
+            onDragEnter={(e) => e.preventDefault()}
             onClick={() => document.getElementById("file-input")?.click()}
           >
-            <input id="file-input" type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+            <input id="file-input" type="file" accept=".csv,.xlsx" className="hidden" onChange={handleFileChange} />
             {file ? (
               <div className="flex items-center justify-center gap-3">
                 <FileSpreadsheet className="h-10 w-10 text-primary" />

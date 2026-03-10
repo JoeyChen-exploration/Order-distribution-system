@@ -107,7 +107,7 @@ export default function OverviewPage() {
 
   if (!stats) {
     return (
-      <div className="p-6">
+      <div>
         <div className="animate-pulse space-y-4">
           <div className="h-8 w-48 bg-muted rounded" />
           <div className="grid grid-cols-4 gap-4">
@@ -121,7 +121,7 @@ export default function OverviewPage() {
   }
 
   return (
-    <div className="p-6">
+    <div>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-foreground">数据概览</h1>
         <p className="text-muted-foreground">实时监控订单和司机状态</p>

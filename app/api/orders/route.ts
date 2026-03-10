@@ -17,6 +17,11 @@ export async function GET(req: NextRequest) {
 // POST /api/orders
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const order = await db.order.create({ data: body })
+  const { orderNo, ...rest } = body
+  const order = await db.order.upsert({
+    where: { orderNo },
+    update: rest,
+    create: body,
+  })
   return NextResponse.json(order, { status: 201 })
 }

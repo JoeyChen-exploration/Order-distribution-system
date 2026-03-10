@@ -94,6 +94,7 @@ export interface Order {
   modifiedUserId?: string
   modifiedAt?: string
   importBatchId: string | null
+  metadata?: string | null  // JSON string: extra fields from xlsx import
   createdAt: string
   updatedAt: string
 }
