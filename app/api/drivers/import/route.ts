@@ -3,6 +3,22 @@ import { db } from "@/lib/db"
 import * as XLSX from "xlsx"
 
 const VALID_VEHICLE_TYPES = ["舒适型", "豪华型", "商务型", "经济型"]
+const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
+
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
+  if (!address) return { lat: 0, lng: 0 }
+  try {
+    const res = await fetch(
+      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=上海`
+    )
+    const data = await res.json()
+    if (data.status === "1" && data.geocodes?.length > 0) {
+      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
+      return { lat, lng }
+    }
+  } catch {}
+  return { lat: 0, lng: 0 }
+}
 
 // 处理电话号码：去除 +86- 或 +86 前缀，只保留数字
 function normalizePhone(raw: string): string {
@@ -53,7 +69,7 @@ export async function POST(req: NextRequest) {
 
   type DriverData = {
     name: string; phone: string; vehicleType: string; vehiclePlate: string
-    homeAddress: string; homeLat: number; homeLng: number; workingHours?: string
+    homeAddress: string; homeLat: number; homeLng: number; workingHours: string
   }
   const toUpsert: { rowNum: number; data: DriverData }[] = []
 
@@ -78,15 +94,22 @@ export async function POST(req: NextRequest) {
     if (!VALID_VEHICLE_TYPES.includes(vehicleType)) {
       errors.push({ row: rowNum, field: "车型", message: `无效车型"${vehicleType}"，应为 舒适型/豪华型/商务型/经济型` })
     }
+    if (!workingHours) {
+      errors.push({ row: rowNum, field: "时间", message: "工作时间不能为空，格式：HH:MM-HH:MM（如 06:00-22:00）" })
+    } else if (!/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(workingHours)) {
+      errors.push({ row: rowNum, field: "时间", message: `工作时间格式错误"${workingHours}"，应为 HH:MM-HH:MM` })
+    }
 
-    if (!name || !phone || !vehiclePlate || !VALID_VEHICLE_TYPES.includes(vehicleType)) continue
+    const workingHoursValid = workingHours && /^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(workingHours)
+    if (!name || !phone || !vehiclePlate || !VALID_VEHICLE_TYPES.includes(vehicleType) || !workingHoursValid) continue
 
+    const homeCoord = homeAddress ? await geocodeAddress(homeAddress) : { lat: 0, lng: 0 }
     toUpsert.push({
       rowNum,
       data: {
         name, phone, vehicleType, vehiclePlate, homeAddress,
-        homeLat: 0, homeLng: 0,
-        ...(workingHours ? { workingHours } : {}),
+        homeLat: homeCoord.lat, homeLng: homeCoord.lng,
+        workingHours,
       },
     })
   }

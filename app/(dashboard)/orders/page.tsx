@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Trash2,
   CalendarIcon,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -65,6 +66,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { getOrders, getDrivers, updateOrder } from "@/lib/store"
 import type { Order, OrderStatus } from "@/lib/types"
+import { OrderImportDialog } from "@/components/order-import-dialog"
 
 const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   0: { label: "待排单", variant: "secondary" },
@@ -87,6 +89,23 @@ const vehicleTypeColors: Record<string, string> = {
   "豪华型": "bg-amber-500",
   "商务型": "bg-purple-500",
   "经济型": "bg-green-500",
+}
+
+const serviceTypeConfig: Record<string, { dot: string; text: string }> = {
+  "接机/站": { dot: "bg-sky-500",    text: "text-sky-400" },
+  "送机/站": { dot: "bg-amber-500",  text: "text-amber-400" },
+  "包车":    { dot: "bg-emerald-500", text: "text-emerald-400" },
+}
+
+function ServiceTypeBadge({ value }: { value: string }) {
+  const cfg = serviceTypeConfig[value]
+  if (!cfg) return <span className="text-xs text-muted-foreground">{value || "-"}</span>
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${cfg.dot}`} />
+      <span className={`text-xs ${cfg.text}`}>{value}</span>
+    </div>
+  )
 }
 
 const METADATA_LABELS: Record<string, string> = {
@@ -127,8 +146,9 @@ export default function OrdersPage() {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null)
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
-  const pageSize = 10
+  const pageSize = 50
 
   useEffect(() => {
     async function load() {
@@ -141,18 +161,24 @@ export default function OrdersPage() {
 
   const filteredOrders = useMemo(() => {
     const dateStr = dateFilter ? format(dateFilter, "yyyy-MM-dd") : ""
-    return orders.filter(order => {
-      const q = searchQuery.toLowerCase()
-      const matchesSearch = !q ||
-        order.orderNo.toLowerCase().includes(q) ||
-        (order.flightNo && order.flightNo.toLowerCase().includes(q))
+    return orders
+      .filter(order => {
+        const q = searchQuery.toLowerCase()
+        const matchesSearch = !q ||
+          order.orderNo.toLowerCase().includes(q) ||
+          (order.flightNo && order.flightNo.toLowerCase().includes(q))
 
-      const matchesStatus = statusFilter === "all" || order.status === Number(statusFilter)
-      const matchesVehicle = vehicleFilter === "all" || order.reqVehicleType === vehicleFilter
-      const matchesDate = !dateStr || order.flightDate === dateStr
+        const matchesStatus = statusFilter === "all" || order.status === Number(statusFilter)
+        const matchesVehicle = vehicleFilter === "all" || order.reqVehicleType === vehicleFilter
+        const matchesDate = !dateStr || order.flightDate === dateStr
 
-      return matchesSearch && matchesStatus && matchesVehicle && matchesDate
-    })
+        return matchesSearch && matchesStatus && matchesVehicle && matchesDate
+      })
+      .sort((a, b) => {
+        const dtA = `${a.flightDate} ${a.pickupTime || "00:00"}`
+        const dtB = `${b.flightDate} ${b.pickupTime || "00:00"}`
+        return dtA.localeCompare(dtB)
+      })
   }, [orders, searchQuery, statusFilter, vehicleFilter, dateFilter])
 
   const paginatedOrders = useMemo(() => {
@@ -193,10 +219,11 @@ export default function OrdersPage() {
   }
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === paginatedOrders.length) {
+    // 全选/取消全选所有筛选结果（跨页），方便大批量删除
+    if (selectedIds.size === filteredOrders.length) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(paginatedOrders.map(o => o.id)))
+      setSelectedIds(new Set(filteredOrders.map(o => o.id)))
     }
   }
 
@@ -210,6 +237,55 @@ export default function OrdersPage() {
     setBatchDeleteOpen(false)
     setBatchMode(false)
     setOrders(await getOrders())
+  }
+
+  const handleExport = async () => {
+    const XLSX = await import("xlsx")
+    const dispatched = orders
+      .slice()
+      .sort((a, b) => `${a.flightDate} ${a.pickupTime}`.localeCompare(`${b.flightDate} ${b.pickupTime}`))
+    const allDrivers = await getDrivers()
+
+    const headers = [
+      "订单号","预订车型","服务类型","服务城市","服务日期","三字码","人数","下单时间",
+      "航班号","上车点","下车点","车号","司机","司机电话","司机分组","实际车型",
+      "架次","公里数","服务标准","举牌服务","备注",
+    ]
+    const rows = dispatched.map(order => {
+      const meta: Record<string, string> = order.metadata ? JSON.parse(order.metadata) : {}
+      const driver = allDrivers.find(d => d.id === order.driverId)
+      const serviceDate = order.flightDate && order.pickupTime
+        ? `${order.flightDate} ${order.pickupTime}:00`
+        : order.flightDate || ""
+      return [
+        order.orderNo,
+        order.reqVehicleType,
+        meta["服务类型"] || meta["serviceType"] || "",
+        meta["serviceCity"] || "",
+        serviceDate,
+        meta["airportCode"] || "",
+        meta["passengerCount"] || "",
+        meta["submittedAt"] || "",
+        order.flightNo || "",
+        order.pickupAddress || "",
+        order.dropoffAddress || "",
+        meta["vehiclePlate"] || driver?.vehiclePlate || "",
+        order.driverName || driver?.name || "",
+        meta["driverPhone"] || driver?.phone || "",
+        meta["driverGroup"] || "",
+        meta["actualVehicleType"] || order.reqVehicleType || "",
+        meta["tripNo"] || "",
+        meta["kilometers"] || "",
+        meta["serviceStandard"] || "",
+        meta["signService"] || "",
+        meta["remarks"] || "",
+      ]
+    })
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, "礼宾车账单")
+    XLSX.writeFile(wb, `排单结果_${format(new Date(), "yyyyMMdd")}.xlsx`)
   }
 
   const clearFilters = () => {
@@ -248,11 +324,13 @@ export default function OrdersPage() {
               批量删除
             </Button>
           )}
-          <Button variant="outline" asChild>
-            <Link href="/orders/import">
-              <Upload className="mr-2 h-4 w-4" />
-              导入订单
-            </Link>
+          <Button variant="outline" onClick={handleExport}>
+            <Download className="mr-2 h-4 w-4" />
+            导出排单
+          </Button>
+          <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            导入订单
           </Button>
           <Button asChild>
             <Link href="/orders/create">
@@ -383,7 +461,7 @@ export default function OrdersPage() {
               <TableRow>
                 <TableHead className="w-[40px]">
                   <Checkbox
-                    checked={paginatedOrders.length > 0 && selectedIds.size === paginatedOrders.length}
+                    checked={filteredOrders.length > 0 && selectedIds.size === filteredOrders.length}
                     onCheckedChange={toggleSelectAll}
                     className={cn("border-muted-foreground/60", !batchMode && "invisible")}
                   />
@@ -435,7 +513,7 @@ export default function OrdersPage() {
                           <div className="flex flex-col">
                             {order.flightNo && <span className="font-medium">{order.flightNo}</span>}
                             <span className="text-xs text-muted-foreground">
-                              {order.flightDate} {order.pickupTime}
+                              {order.flightDate}{order.pickupTime ? ` ${order.pickupTime}` : ""}
                             </span>
                           </div>
                         </TableCell>
@@ -457,7 +535,7 @@ export default function OrdersPage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-xs">{meta.serviceStandard || "-"}</TableCell>
-                        <TableCell className="text-xs">{meta.serviceType || "-"}</TableCell>
+                        <TableCell><ServiceTypeBadge value={meta["服务类型"] || meta.serviceType || ""} /></TableCell>
                         <TableCell className="text-xs">{meta.passengerCount || "-"}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
@@ -596,6 +674,11 @@ export default function OrdersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <OrderImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onSuccess={async () => setOrders(await getOrders())}
+      />
     </div>
   )
 }

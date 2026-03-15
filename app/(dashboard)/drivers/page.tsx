@@ -41,6 +41,7 @@ import type { Driver, DriverStatus } from '@/lib/types'
 import { DRIVER_STATUS_LABELS, VEHICLE_TYPE_LABELS } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Progress } from '@/components/ui/progress'
 import {
   Plus,
   Search,
@@ -55,6 +56,7 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
+  Loader2,
 } from 'lucide-react'
 
 const STATUS_COLORS: Record<DriverStatus, string> = {
@@ -87,8 +89,10 @@ export default function DriversPage() {
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState(0)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const importTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadDrivers = async () => {
     const data = await getDrivers()
@@ -180,23 +184,37 @@ export default function DriversPage() {
   const handleImport = async () => {
     if (!importFile) return
     setImporting(true)
+    setImportProgress(0)
+
+    // Animate progress to ~85% while server processes
+    let fake = 0
+    importTimerRef.current = setInterval(() => {
+      fake = Math.min(fake + Math.random() * 7 + 1, 85)
+      setImportProgress(Math.round(fake))
+    }, 350)
+
     try {
       const formData = new FormData()
       formData.append('file', importFile)
       formData.append('importedBy', 'admin')
       const res = await fetch('/api/drivers/import', { method: 'POST', body: formData })
       const result: ImportResult = await res.json()
+      if (importTimerRef.current) clearInterval(importTimerRef.current)
+      setImportProgress(100)
       setImportResult(result)
       if (result.successRows > 0) await loadDrivers()
     } finally {
+      if (importTimerRef.current) clearInterval(importTimerRef.current)
       setImporting(false)
     }
   }
 
   const handleImportDialogClose = () => {
+    if (importing) return
     setImportDialogOpen(false)
     setImportFile(null)
     setImportResult(null)
+    setImportProgress(0)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -421,107 +439,121 @@ export default function DriversPage() {
       </Card>
 
       {/* xlsx 导入对话框 */}
-      <Dialog open={importDialogOpen} onOpenChange={handleImportDialogClose}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={importDialogOpen} onOpenChange={o => { if (!o) handleImportDialogClose() }}>
+        <DialogContent
+          className="max-w-lg"
+          onEscapeKeyDown={e => { if (importing) e.preventDefault() }}
+          onPointerDownOutside={e => { if (importing) e.preventDefault() }}
+        >
           <DialogHeader>
-            <DialogTitle>导入司机 Excel</DialogTitle>
-            <DialogDescription>
-              支持 .xlsx / .xls 格式，首行为表头
-            </DialogDescription>
+            <DialogTitle>导入司机</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* 格式说明 */}
-            <div className="rounded-md border border-border/50 bg-muted/30 p-3 text-sm">
-              <p className="font-medium mb-2">必填列（表头名称）：</p>
-              <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
-                <span>• 司机</span>
-                <span>• 司机电话</span>
-                <span>• 车型（舒适型/豪华型/商务型/经济型）</span>
-                <span>• 车号</span>
-              </div>
-              <p className="font-medium mt-2 mb-1">可选列：</p>
-              <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
-                <span>• 住（常驻区域）</span>
-                <span>• 班次</span>
-                <span>• 时间（如 05:00-18:00）</span>
-              </div>
-            </div>
-
-            {/* 上传区 */}
-            {!importResult ? (
-              <div
-                className="border-2 border-dashed border-border/50 rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
-                onClick={() => fileInputRef.current?.click()}
-                onDrop={handleImportDrop}
-                onDragOver={(e) => e.preventDefault()}
-                onDragEnter={(e) => e.preventDefault()}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  className="hidden"
-                  onChange={handleFileSelect}
-                />
-                {importFile ? (
-                  <div className="flex items-center justify-center gap-2">
-                    <FileSpreadsheet className="w-6 h-6 text-primary" />
-                    <span className="font-medium">{importFile.name}</span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setImportFile(null) }}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">点击选择文件或拖放到此处</p>
-                    <p className="text-xs text-muted-foreground mt-1">.xlsx / .xls</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* 导入结果 */
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 rounded-md bg-green-500/10 border border-green-500/20 p-3">
-                  <CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" />
-                  <span className="text-sm">成功导入 <strong>{importResult.successRows}</strong> 条记录</span>
+            {/* ── 导入中 ── */}
+            {importing && (
+              <div className="flex flex-col items-center justify-center gap-4 py-10">
+                <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">正在导入并地理编码，请勿关闭…</p>
+                <div className="w-full max-w-sm">
+                  <Progress value={importProgress} className="h-2" />
+                  <p className="text-xs text-right text-muted-foreground mt-1">{importProgress}%</p>
                 </div>
-                {importResult.detectedHeaders && importResult.detectedHeaders.length > 0 && (
-                  <div className="rounded-md bg-muted/30 border border-border/50 p-3">
-                    <p className="text-xs font-medium mb-1">检测到的列名（共 {importResult.detectedHeaders.length} 列）：</p>
-                    <p className="text-xs text-muted-foreground break-all">{importResult.detectedHeaders.join(" | ")}</p>
+                <p className="text-xs text-muted-foreground/60">导入过程中请勿关闭或刷新页面</p>
+              </div>
+            )}
+
+            {/* ── 完成 ── */}
+            {!importing && importResult && (
+              <div className="space-y-3 py-2">
+                <div className="flex items-center gap-3 rounded-md bg-primary/10 border border-primary/20 p-4">
+                  <CheckCircle2 className="h-6 w-6 text-primary shrink-0" />
+                  <div>
+                    <p className="font-medium">导入完成</p>
+                    <p className="text-sm text-muted-foreground">
+                      成功 <strong>{importResult.successRows}</strong> 条
+                      {importResult.errorRows > 0 && `，失败 ${importResult.errorRows} 条`}
+                    </p>
                   </div>
-                )}
+                </div>
                 {importResult.errorRows > 0 && (
                   <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3">
                     <div className="flex items-center gap-2 mb-2">
                       <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
-                      <span className="text-sm font-medium text-destructive">{importResult.errorRows} 条失败</span>
+                      <span className="text-sm font-medium text-destructive">{importResult.errorRows} 条有错误</span>
                     </div>
                     <ul className="text-xs text-muted-foreground space-y-1 max-h-32 overflow-y-auto">
                       {importResult.errors.map((e, i) => (
-                        <li key={i}>
-                          {e.row > 0 ? `第 ${e.row} 行` : ''} [{e.field}] {e.message}
-                        </li>
+                        <li key={i}>{e.row > 0 ? `第 ${e.row} 行` : ''} [{e.field}] {e.message}</li>
                       ))}
                     </ul>
                   </div>
                 )}
               </div>
             )}
+
+            {/* ── 文件选择 ── */}
+            {!importing && !importResult && (
+              <>
+                {/* 格式说明 */}
+                <div className="rounded-md border border-border/50 bg-muted/30 p-3 text-sm">
+                  <p className="font-medium mb-1 text-xs">必填列：</p>
+                  <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
+                    <span>• 司机</span><span>• 司机电话</span>
+                    <span>• 车型（舒适/豪华/商务/经济型）</span><span>• 车号</span>
+                    <span>• 时间（如 05:00-18:00）</span>
+                  </div>
+                  <p className="font-medium mt-2 mb-1 text-xs">可选列：</p>
+                  <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
+                    <span>• 住（常驻区域）</span><span>• 班次</span>
+                  </div>
+                </div>
+
+                {/* 拖放区 */}
+                <div
+                  className="border-2 border-dashed border-border/50 rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                  onDrop={handleImportDrop}
+                  onDragOver={e => e.preventDefault()}
+                  onDragEnter={e => e.preventDefault()}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+                  {importFile ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <FileSpreadsheet className="h-5 w-5 text-primary" />
+                      <span className="font-medium text-sm">{importFile.name}</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); setImportFile(null) }}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">点击或拖拽 .xlsx / .xls 文件到此处</p>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={handleImportDialogClose}>
+            <Button variant="outline" onClick={handleImportDialogClose} disabled={importing}>
               {importResult ? '关闭' : '取消'}
             </Button>
-            {!importResult && (
-              <Button onClick={handleImport} disabled={!importFile || importing}>
-                {importing ? '导入中...' : '开始导入'}
+            {!importResult && !importing && (
+              <Button onClick={handleImport} disabled={!importFile}>
+                <Upload className="mr-2 h-4 w-4" />
+                开始导入
               </Button>
             )}
           </DialogFooter>

@@ -17,6 +17,19 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
+const vehicleTypeColors: Record<string, string> = {
+  "舒适型": "bg-blue-500",
+  "豪华型": "bg-amber-500",
+  "商务型": "bg-purple-500",
+  "经济型": "bg-green-500",
+}
+
+const serviceTypeColors: Record<string, string> = {
+  "接机/站": "text-sky-400",
+  "送机/站": "text-amber-400",
+  "包车":    "text-emerald-400",
+}
+
 interface StatCardProps {
   title: string
   value: number
@@ -53,36 +66,49 @@ function RecentOrdersTable({ orders }: { orders: Order[] }) {
         <thead>
           <tr className="border-b border-border/50">
             <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">订单号</th>
-            <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">乘客</th>
             <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">航班</th>
-            <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">接车时间</th>
+            <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">服务时间</th>
+            <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">车型</th>
+            <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">服务类型</th>
             <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">状态</th>
           </tr>
         </thead>
         <tbody>
-          {orders.map((order) => (
-            <tr key={order.id} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
-              <td className="py-3 px-4 text-sm font-mono text-foreground">{order.orderNo}</td>
-              <td className="py-3 px-4 text-sm text-foreground">{order.passengerName}</td>
-              <td className="py-3 px-4 text-sm text-muted-foreground">{order.flightNo}</td>
-              <td className="py-3 px-4 text-sm text-muted-foreground">
-                {new Date(order.pickupTime).toLocaleString('zh-CN', {
-                  month: '2-digit',
-                  day: '2-digit',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </td>
-              <td className="py-3 px-4">
-                <span className={cn(
-                  'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border',
-                  ORDER_STATUS_COLORS[order.status]
-                )}>
-                  {ORDER_STATUS_LABELS[order.status]}
-                </span>
-              </td>
-            </tr>
-          ))}
+          {orders.map((order) => {
+            const meta = order.metadata ? (() => { try { return JSON.parse(order.metadata!) } catch { return {} } })() : {}
+            return (
+              <tr key={order.id} className="border-b border-border/30 hover:bg-muted/30 transition-colors">
+                <td className="py-3 px-4 text-sm font-mono text-foreground">{order.orderNo}</td>
+                <td className="py-3 px-4 text-sm text-muted-foreground">{order.flightNo || "-"}</td>
+                <td className="py-3 px-4 text-sm text-muted-foreground">
+                  {order.flightDate}{order.pickupTime ? " " + order.pickupTime : ""}
+                </td>
+                <td className="py-3 px-4 text-sm">
+                  <div className="flex items-center gap-1.5">
+                    <span className={cn("inline-block w-2 h-2 rounded-sm shrink-0", vehicleTypeColors[order.reqVehicleType] ?? "bg-muted")} />
+                    <span className="text-muted-foreground">{order.reqVehicleType}</span>
+                  </div>
+                </td>
+                <td className="py-3 px-4 text-sm">
+                  {meta["服务类型"] ? (
+                    <span className={cn("text-sm", serviceTypeColors[meta["服务类型"]] ?? "text-muted-foreground")}>
+                      {meta["服务类型"]}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">-</span>
+                  )}
+                </td>
+                <td className="py-3 px-4">
+                  <span className={cn(
+                    'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border',
+                    ORDER_STATUS_COLORS[order.status]
+                  )}>
+                    {ORDER_STATUS_LABELS[order.status]}
+                  </span>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

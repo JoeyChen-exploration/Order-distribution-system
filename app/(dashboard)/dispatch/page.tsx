@@ -17,6 +17,8 @@ import {
   UserCheck,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -68,12 +70,17 @@ export default function DispatchPage() {
   const [showResultDialog, setShowResultDialog] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined)
+  const [orderSearch, setOrderSearch] = useState("")
+  const [batchMode, setBatchMode] = useState(false)
 
   // Manual dispatch state
   const [manualOrder, setManualOrder] = useState<Order | null>(null)
   const [showManualDialog, setShowManualDialog] = useState(false)
   const [selectedDriverId, setSelectedDriverId] = useState<string>("")
   const [manualDriverFilter, setManualDriverFilter] = useState<"all" | "available">("available")
+  const [manualSearch, setManualSearch] = useState("")
+  const [manualVehicleFilter, setManualVehicleFilter] = useState<string>("all")
+  const [manualShiftFilter, setManualShiftFilter] = useState<"all" | "day" | "night">("all")
 
   useEffect(() => {
     async function load() {
@@ -98,19 +105,43 @@ export default function DispatchPage() {
   }, [preselectedOrderId, isReassign])
 
   const filteredOrders = useMemo(() => {
-    if (!dateFilter) return pendingOrders
-    const dateStr = format(dateFilter, "yyyy-MM-dd")
-    return pendingOrders.filter(o => o.flightDate === dateStr)
-  }, [pendingOrders, dateFilter])
+    let list = pendingOrders
+    if (dateFilter) {
+      const dateStr = format(dateFilter, "yyyy-MM-dd")
+      list = list.filter(o => o.flightDate === dateStr)
+    }
+    if (orderSearch.trim()) {
+      const q = orderSearch.trim().toLowerCase()
+      list = list.filter(o =>
+        o.orderNo.toLowerCase().includes(q) ||
+        o.flightNo.toLowerCase().includes(q) ||
+        (o.pickupAddress || "").toLowerCase().includes(q)
+      )
+    }
+    return list
+  }, [pendingOrders, dateFilter, orderSearch])
 
   const stats = useMemo(() => {
-    const availableDrivers = drivers.filter(d => d.status === "available")
+    const candidateDrivers = drivers.filter(d => d.status === "available" || d.status === "busy")
     return {
       pendingCount: pendingOrders.length,
-      availableDrivers: availableDrivers.length,
+      availableDrivers: candidateDrivers.length,
       selectedCount: selectedOrders.size,
     }
   }, [pendingOrders, drivers, selectedOrders])
+
+  const [coordWarningExpanded, setCoordWarningExpanded] = useState(false)
+
+  const coordWarning = useMemo(() => {
+    const badOrders = pendingOrders.filter(o => !o.pickupLat || !o.pickupLng)
+    const badDrivers = drivers.filter(d => !d.homeLat || !d.homeLng)
+    return {
+      ordersNoCoord: badOrders.length,
+      driversNoCoord: badDrivers.length,
+      badOrders,
+      badDrivers,
+    }
+  }, [pendingOrders, drivers])
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
@@ -128,8 +159,9 @@ export default function DispatchPage() {
   }
 
   const handleSingleDispatch = (order: Order) => {
-    const availableDrivers = drivers.filter(d => d.status === "available")
-    const result = runDispatchAlgorithm(order, availableDrivers, allOrders)
+    // 同时包含 available 和 busy 司机（busy 司机可排未来时段的单，时间冲突由算法检查）
+    const candidateDrivers = drivers.filter(d => d.status === "available" || d.status === "busy")
+    const result = runDispatchAlgorithm(order, candidateDrivers, allOrders)
     setCurrentResult(result)
     setShowResultDialog(true)
   }
@@ -138,6 +170,9 @@ export default function DispatchPage() {
     setManualOrder(order)
     setSelectedDriverId("")
     setManualDriverFilter("available")
+    setManualSearch("")
+    setManualVehicleFilter("all")
+    setManualShiftFilter("all")
     setShowManualDialog(true)
   }
 
@@ -146,8 +181,8 @@ export default function DispatchPage() {
     setIsProcessing(true)
     await new Promise(resolve => setTimeout(resolve, 500))
     const ordersToDispatch = filteredOrders.filter(o => selectedOrders.has(o.id))
-    const availableDrivers = drivers.filter(d => d.status === "available")
-    const results = batchDispatch(ordersToDispatch, availableDrivers, allOrders)
+    const candidateDrivers = drivers.filter(d => d.status === "available" || d.status === "busy")
+    const results = batchDispatch(ordersToDispatch, candidateDrivers, allOrders)
     setBatchResults(results)
     setIsProcessing(false)
   }
@@ -183,20 +218,44 @@ export default function DispatchPage() {
     setManualOrder(null)
   }
 
-  const handleConfirmAllBatch = () => {
+  const handleConfirmAllBatch = async () => {
     if (!batchResults) return
-    batchResults.forEach((result, orderId) => {
-      if (result.bestMatch) {
-        handleConfirmDispatch(orderId, result.bestMatch.driverId)
-      }
-    })
+    // 先清空面板和模式，再异步执行派单（避免确认后面板重新渲染空列表）
+    const toDispatch = Array.from(batchResults.entries())
+      .filter(([, result]) => result.bestMatch)
+      .map(([orderId, result]) => ({ orderId, driverId: result.bestMatch!.driverId }))
     setBatchResults(null)
+    setBatchMode(false)
+    setSelectedOrders(new Set())
+    for (const { orderId, driverId } of toDispatch) {
+      await updateDriver(driverId, { status: "busy" })
+      await updateOrder(orderId, { driverId, status: 1 })
+    }
+    const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
+    setAllOrders(orders)
+    setDrivers(driverList)
+    setPendingOrders(orders.filter(o => o.status === 0))
   }
 
   const manualDriverList = useMemo(() => {
-    if (manualDriverFilter === "available") return drivers.filter(d => d.status === "available")
-    return drivers
-  }, [drivers, manualDriverFilter])
+    return drivers.filter(d => {
+      if (manualDriverFilter === "available" && d.status !== "available") return false
+      if (manualVehicleFilter !== "all" && d.vehicleType !== manualVehicleFilter) return false
+      if (manualSearch) {
+        const q = manualSearch.toLowerCase()
+        const matchName = d.name.toLowerCase().includes(q)
+        const matchAddress = (d.homeAddress || "").toLowerCase().includes(q)
+        if (!matchName && !matchAddress) return false
+      }
+      if (manualShiftFilter !== "all" && d.workingHours) {
+        const startHour = parseInt(d.workingHours.split(":")[0], 10)
+        const isDay = startHour >= 4 && startHour < 14
+        if (manualShiftFilter === "day" && !isDay) return false
+        if (manualShiftFilter === "night" && isDay) return false
+      }
+      return true
+    })
+  }, [drivers, manualDriverFilter, manualSearch, manualVehicleFilter, manualShiftFilter])
 
   return (
     <div className="flex flex-col gap-6">
@@ -241,6 +300,56 @@ export default function DispatchPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Coordinate Warning */}
+      {(coordWarning.ordersNoCoord > 0 || coordWarning.driversNoCoord > 0) && (
+        <div className="rounded-lg border border-warning/40 bg-warning/5 text-sm">
+          <button
+            className="w-full flex items-start gap-3 px-4 py-3 text-left"
+            onClick={() => setCoordWarningExpanded(v => !v)}
+          >
+            <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
+            <div className="text-warning/90 space-y-0.5 flex-1">
+              <p className="font-medium">坐标数据不完整，距离评分及行驶时间估算将不准确</p>
+              <p className="text-warning/70">
+                {coordWarning.ordersNoCoord > 0 && `${coordWarning.ordersNoCoord} 条待派单缺少经纬度`}
+                {coordWarning.ordersNoCoord > 0 && coordWarning.driversNoCoord > 0 && "；"}
+                {coordWarning.driversNoCoord > 0 && `${coordWarning.driversNoCoord} 位司机缺少住址坐标`}
+                {" — 点击展开查看详情，重新导入可修复"}
+              </p>
+            </div>
+            <span className="text-warning/60 text-xs mt-0.5">{coordWarningExpanded ? "收起 ▲" : "展开 ▼"}</span>
+          </button>
+          {coordWarningExpanded && (
+            <div className="px-4 pb-3 flex gap-8 text-xs text-warning/80 border-t border-warning/20 pt-3">
+              {coordWarning.badOrders.length > 0 && (
+                <div>
+                  <p className="font-medium mb-1">缺坐标的订单（{coordWarning.badOrders.length} 条）</p>
+                  <ul className="space-y-0.5 max-h-32 overflow-auto">
+                    {coordWarning.badOrders.map(o => (
+                      <li key={o.id} className="font-mono">
+                        {o.orderNo} <span className="text-warning/50">· {o.flightDate} {o.pickupTime}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {coordWarning.badDrivers.length > 0 && (
+                <div>
+                  <p className="font-medium mb-1">缺坐标的司机（{coordWarning.badDrivers.length} 位）</p>
+                  <ul className="space-y-0.5 max-h-32 overflow-auto">
+                    {coordWarning.badDrivers.map(d => (
+                      <li key={d.id}>
+                        {d.name} <span className="text-warning/50">· {d.homeAddress || "无住址"}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Batch Results */}
       {batchResults && batchResults.size > 0 && (
@@ -291,7 +400,12 @@ export default function DispatchPage() {
                             <span className="text-sm text-muted-foreground">评分 {result.bestMatch.totalScore}</span>
                           </div>
                         ) : (
-                          <Badge variant="destructive">无匹配司机</Badge>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="destructive">无匹配司机</Badge>
+                            <span className="text-xs text-muted-foreground max-w-[240px] truncate" title={result.message}>
+                              {result.message}
+                            </span>
+                          </div>
                         )}
                       </div>
                       <div className="flex items-center gap-2">
@@ -313,9 +427,28 @@ export default function DispatchPage() {
       {/* Orders Table */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>待派单列表</CardTitle>
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-4">
+            <CardTitle className="shrink-0">待派单列表</CardTitle>
+            <div className="flex items-center gap-2 flex-1 justify-end">
+              <div className="relative w-[220px]">
+                <Input
+                  placeholder="搜索订单号、航班号..."
+                  value={orderSearch}
+                  onChange={e => setOrderSearch(e.target.value)}
+                  className="h-8 text-sm pl-8"
+                />
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                </span>
+                {orderSearch && (
+                  <button
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setOrderSearch("")}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -341,17 +474,32 @@ export default function DispatchPage() {
                   清除
                 </Button>
               )}
-              <Button
-                onClick={handleBatchDispatch}
-                disabled={selectedOrders.size === 0 || isProcessing}
-              >
-                {isProcessing ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
+              {batchMode ? (
+                <>
+                  <Button
+                    onClick={handleBatchDispatch}
+                    disabled={selectedOrders.size === 0 || isProcessing}
+                  >
+                    {isProcessing ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Zap className="mr-2 h-4 w-4" />
+                    )}
+                    确认派单 ({selectedOrders.size})
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => { setBatchMode(false); setSelectedOrders(new Set()) }}
+                  >
+                    取消
+                  </Button>
+                </>
+              ) : (
+                <Button onClick={() => setBatchMode(true)}>
                   <Zap className="mr-2 h-4 w-4" />
-                )}
-                批量智能派单 ({selectedOrders.size})
-              </Button>
+                  批量智能派单
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>
@@ -363,7 +511,7 @@ export default function DispatchPage() {
                   <Checkbox
                     checked={filteredOrders.length > 0 && filteredOrders.every(o => selectedOrders.has(o.id))}
                     onCheckedChange={handleSelectAll}
-                    className="border-muted-foreground/60"
+                    className={cn("border-muted-foreground/60", !batchMode && "invisible")}
                   />
                 </TableHead>
                 <TableHead>订单号</TableHead>
@@ -388,7 +536,7 @@ export default function DispatchPage() {
                       <Checkbox
                         checked={selectedOrders.has(order.id)}
                         onCheckedChange={(checked) => handleSelectOrder(order.id, checked as boolean)}
-                        className="border-muted-foreground/60"
+                        className={cn("border-muted-foreground/60", !batchMode && "invisible")}
                       />
                     </TableCell>
                     <TableCell className="font-mono text-xs">{order.orderNo}</TableCell>
@@ -396,7 +544,9 @@ export default function DispatchPage() {
                     <TableCell>
                       <div className="flex flex-col">
                         <span>{order.flightDate}</span>
-                        <span className="text-xs text-muted-foreground">{order.pickupTime}</span>
+                        {order.pickupTime && (
+                          <span className="text-xs text-muted-foreground">{order.pickupTime}</span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -526,34 +676,56 @@ export default function DispatchPage() {
 
       {/* Manual Dispatch Dialog */}
       <Dialog open={showManualDialog} onOpenChange={setShowManualDialog}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>手动派单</DialogTitle>
             <DialogDescription>
-              {manualOrder && `${manualOrder.orderNo} · ${manualOrder.flightDate} · ${manualOrder.reqVehicleType}`}
+              {manualOrder && `${manualOrder.orderNo} · ${manualOrder.flightDate}${manualOrder.pickupTime ? " " + manualOrder.pickupTime : ""} · ${manualOrder.reqVehicleType}`}
             </DialogDescription>
           </DialogHeader>
           <div className="py-2 space-y-3">
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant={manualDriverFilter === "available" ? "default" : "outline"}
-                onClick={() => setManualDriverFilter("available")}
-              >
-                仅显示可用司机
-              </Button>
-              <Button
-                size="sm"
-                variant={manualDriverFilter === "all" ? "default" : "outline"}
-                onClick={() => setManualDriverFilter("all")}
-              >
-                全部司机
-              </Button>
+            {/* 搜索 + 筛选 */}
+            <div className="flex flex-col gap-2">
+              <Input
+                placeholder="搜索司机姓名或住址..."
+                value={manualSearch}
+                onChange={e => setManualSearch(e.target.value)}
+                className="h-8 text-sm"
+              />
+              <div className="flex gap-2 flex-wrap">
+                <Button size="sm" variant={manualDriverFilter === "available" ? "default" : "outline"}
+                  onClick={() => setManualDriverFilter("available")}>仅空闲</Button>
+                <Button size="sm" variant={manualDriverFilter === "all" ? "default" : "outline"}
+                  onClick={() => setManualDriverFilter("all")}>全部</Button>
+                <Select value={manualVehicleFilter} onValueChange={setManualVehicleFilter}>
+                  <SelectTrigger className="h-8 w-[100px] text-xs">
+                    <SelectValue placeholder="车型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部车型</SelectItem>
+                    <SelectItem value="舒适型">舒适型</SelectItem>
+                    <SelectItem value="豪华型">豪华型</SelectItem>
+                    <SelectItem value="商务型">商务型</SelectItem>
+                    <SelectItem value="经济型">经济型</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={manualShiftFilter} onValueChange={v => setManualShiftFilter(v as "all" | "day" | "night")}>
+                  <SelectTrigger className="h-8 w-[100px] text-xs">
+                    <SelectValue placeholder="班次" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">全部班次</SelectItem>
+                    <SelectItem value="day">白班</SelectItem>
+                    <SelectItem value="night">夜班</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <ScrollArea className="h-[320px] border rounded-md">
+            <p className="text-xs text-muted-foreground">共 {manualDriverList.length} 位司机</p>
+            <ScrollArea className="h-[340px] border rounded-md">
               {manualDriverList.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm p-8">
-                  暂无可用司机
+                  暂无符合条件的司机
                 </div>
               ) : (
                 <div className="divide-y">
@@ -567,26 +739,34 @@ export default function DispatchPage() {
                       onClick={() => setSelectedDriverId(driver.id)}
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-medium">
+                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-medium shrink-0">
                           {driver.name.charAt(0)}
                         </div>
                         <div>
                           <p className="font-medium text-sm">{driver.name}</p>
                           <p className="text-xs text-muted-foreground">{driver.phone} · {driver.vehiclePlate}</p>
+                          {driver.homeAddress && (
+                            <p className="text-xs text-muted-foreground/70 truncate max-w-[220px]" title={driver.homeAddress}>
+                              住：{driver.homeAddress}
+                            </p>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className={cn(
-                          "px-1.5 py-0.5 rounded text-xs",
-                          driver.status === "available" ? "bg-green-500/20 text-green-400" :
-                          driver.status === "busy" ? "bg-yellow-500/20 text-yellow-400" :
-                          "bg-gray-500/20 text-gray-400"
-                        )}>
-                          {driver.status === "available" ? "空闲" : driver.status === "busy" ? "忙碌" : "休息"}
-                        </span>
-                        <span className="text-muted-foreground">{driver.vehicleType}</span>
-                        {selectedDriverId === driver.id && (
-                          <CheckCircle2 className="h-4 w-4 text-primary" />
+                      <div className="flex flex-col items-end gap-1 text-xs shrink-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className={cn(
+                            "px-1.5 py-0.5 rounded text-xs",
+                            driver.status === "available" ? "bg-green-500/20 text-green-400" :
+                            driver.status === "busy" ? "bg-yellow-500/20 text-yellow-400" :
+                            "bg-gray-500/20 text-gray-400"
+                          )}>
+                            {driver.status === "available" ? "空闲" : driver.status === "busy" ? "忙碌" : "休息"}
+                          </span>
+                          <span className="text-muted-foreground">{driver.vehicleType}</span>
+                          {selectedDriverId === driver.id && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                        </div>
+                        {driver.workingHours && (
+                          <span className="text-muted-foreground/70">{driver.workingHours}</span>
                         )}
                       </div>
                     </div>

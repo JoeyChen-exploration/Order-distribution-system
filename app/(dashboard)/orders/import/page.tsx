@@ -28,6 +28,22 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { createOrder } from "@/lib/store"
 
+const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
+
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
+  if (!address) return { lat: 0, lng: 0 }
+  try {
+    const res = await fetch(
+      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=上海`
+    )
+    const data = await res.json()
+    if (data.status === "1" && data.geocodes?.length > 0) {
+      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
+      return { lat, lng }
+    }
+  } catch {}
+  return { lat: 0, lng: 0 }
+}
 
 interface ParsedRow {
   rowIndex: number
@@ -42,7 +58,6 @@ const fieldMapping: Record<string, string> = {
   // 核心订单字段
   "订单号": "orderNo",
   "预订车型": "reqVehicleType",
-  "服务类型": "serviceType",
   "服务城市": "serviceCity",
   "服务日期": "flightDate",
   "三字码": "airportCode",
@@ -139,8 +154,12 @@ export default function OrderImportPage() {
           const raw = row[idx]
           let value: string
           if (raw instanceof Date) {
-            // cellDates:true 时日期字段会是 Date 对象
-            value = raw.toISOString().slice(0, 10)
+            // 转为中国时间 (UTC+8)
+            const cst = new Date(raw.getTime() + 8 * 60 * 60 * 1000)
+            const pad = (n: number) => String(n).padStart(2, "0")
+            const dateStr = `${cst.getUTCFullYear()}-${pad(cst.getUTCMonth() + 1)}-${pad(cst.getUTCDate())}`
+            const timeStr = `${pad(cst.getUTCHours())}:${pad(cst.getUTCMinutes())}`
+            value = `${dateStr} ${timeStr}`
           } else {
             value = String(raw ?? "").trim()
           }
@@ -148,9 +167,15 @@ export default function OrderImportPage() {
           if (value) data[header] = value
         })
 
-        // Normalize flightDate: take only date part if datetime is given
+        // 从"服务日期"（含日期和时间，如 "2026-03-06 00:15"）中拆分出 flightDate 和 pickupTime
         if (data.flightDate) {
-          data.flightDate = String(data.flightDate).slice(0, 10)
+          const dateTimeStr = String(data.flightDate)
+          const parts = dateTimeStr.split(/[\sT]/)
+          data.flightDate = parts[0]  // YYYY-MM-DD
+          // 如果 pickupTime 未单独映射，从日期时间字段中提取
+          if (parts[1] && !data.pickupTime) {
+            data.pickupTime = parts[1].slice(0, 5)  // HH:MM
+          }
         }
 
         parsed.push(validateRow(data, i))
@@ -201,6 +226,13 @@ export default function OrderImportPage() {
             extra[k] = String(v)
           }
         }
+        // 并发地理编码上下车点
+        const pickupAddr = String(d.pickupAddress || "")
+        const dropoffAddr = String(d.dropoffAddress || "")
+        const [pickupCoord, dropoffCoord] = await Promise.all([
+          geocodeAddress(pickupAddr),
+          geocodeAddress(dropoffAddr),
+        ])
         await createOrder({
           orderNo: String(d.orderNo || `IMP-${Date.now()}-${i}`),
           passengerName: String(d.passengerName || ""),
@@ -208,12 +240,12 @@ export default function OrderImportPage() {
           flightNo: String(d.flightNo || ""),
           flightDate: String(d.flightDate || ""),
           pickupTime: String(d.pickupTime || ""),
-          pickupAddress: String(d.pickupAddress || ""),
-          pickupLat: 0,
-          pickupLng: 0,
-          dropoffAddress: String(d.dropoffAddress || ""),
-          dropoffLat: 0,
-          dropoffLng: 0,
+          pickupAddress: pickupAddr,
+          pickupLat: pickupCoord.lat,
+          pickupLng: pickupCoord.lng,
+          dropoffAddress: dropoffAddr,
+          dropoffLat: dropoffCoord.lat,
+          dropoffLng: dropoffCoord.lng,
           reqVehicleType: String(d.reqVehicleType || "舒适型") as "舒适型" | "豪华型" | "商务型" | "经济型",
           status: 0,
           driverName: d.driverName ? String(d.driverName) : undefined,
@@ -226,7 +258,6 @@ export default function OrderImportPage() {
         failed++
       }
       setImportProgress(Math.round(((i + 1) / valid.length) * 100))
-      await new Promise(r => setTimeout(r, 30))
     }
 
     setImportResult({ success, failed })
