@@ -30,11 +30,17 @@ import { createOrder } from "@/lib/store"
 
 const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
 
+function extractCity(address: string): string {
+  const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
+  return m ? m[0].replace(/省|区|县/, "市") : "上海"
+}
+
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
   if (!address) return { lat: 0, lng: 0 }
   try {
+    const city = extractCity(address)
     const res = await fetch(
-      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=上海`
+      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=${encodeURIComponent(city)}`
     )
     const data = await res.json()
     if (data.status === "1" && data.geocodes?.length > 0) {

@@ -42,6 +42,14 @@ const VEHICLE_MAP: Record<string, string> = {
   "舒适型": "舒适型", "豪华型": "豪华型", "商务型": "商务型", "经济型": "经济型",
 }
 
+const SERVICE_TYPE_MAP: Record<string, string> = {
+  "接机": "接机/站", "接站": "接机/站", "接机/站": "接机/站",
+  "送机": "送机/站", "送站": "送机/站", "送机/站": "送机/站",
+  "包车": "包车",
+  "市内约车": "市内约车", "约车": "市内约车",
+  "点对点": "市内约车",  // 点对点 → 市内约车
+}
+
 const CORE_FIELDS = new Set([
   "orderNo", "reqVehicleType", "flightDate", "flightNo",
   "pickupAddress", "dropoffAddress", "driverName",
@@ -65,10 +73,16 @@ const ADDR_ALIAS: Record<string, string> = {
   "shanghai hongqiao railway station": "上海虹桥站",
 }
 
+function extractCity(address: string): string {
+  const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
+  return m ? m[0].replace(/省|区|县/, "市") : "上海"
+}
+
 async function tryGeocode(address: string): Promise<{ lat: number; lng: number } | null> {
   try {
+    const city = extractCity(address)
     const res = await fetch(
-      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=上海`
+      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=${encodeURIComponent(city)}`
     )
     const data = await res.json()
     if (data.status === "1" && data.geocodes?.length > 0) {
@@ -77,6 +91,11 @@ async function tryGeocode(address: string): Promise<{ lat: number; lng: number }
     }
   } catch {}
   return null
+}
+
+/** 剥离地址中的括号导航提示，如"(临顿路地铁站1号口步行380米)" */
+function stripParens(address: string): string {
+  return address.replace(/[（(][^）)]*[）)]/g, "").replace(/\s+/g, " ").trim()
 }
 
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
@@ -95,8 +114,15 @@ async function geocodeAddress(address: string): Promise<{ lat: number; lng: numb
   const r1 = await tryGeocode(address)
   if (r1) return r1
 
-  // 3. 回退：按逗号拆分，从最后一段往前试（最后一段通常是酒店/地标名）
-  const parts = address.split(",").map(p => p.trim()).filter(p => p.length > 3)
+  // 3. 剥离括号内容后重试（括号里通常是导航提示，非地址成分）
+  const stripped = stripParens(address)
+  if (stripped !== address) {
+    const r2 = await tryGeocode(stripped)
+    if (r2) return r2
+  }
+
+  // 4. 回退：按逗号拆分，从最后一段往前试（最后一段通常是酒店/地标名）
+  const parts = stripped.split(",").map(p => p.trim()).filter(p => p.length > 3)
   for (let i = parts.length - 1; i >= 0; i--) {
     const r = await tryGeocode(parts[i])
     if (r) return r
@@ -191,6 +217,7 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
             value = String(raw ?? "").trim()
           }
           if (header === "reqVehicleType") value = VEHICLE_MAP[value] || value
+          if (header === "服务类型") value = SERVICE_TYPE_MAP[value] || value
           if (value) data[header] = value
         })
         if (data.flightDate) {
@@ -249,7 +276,7 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
           pickupLat: pickupCoord.lat, pickupLng: pickupCoord.lng,
           dropoffAddress: dropoffAddr,
           dropoffLat: dropoffCoord.lat, dropoffLng: dropoffCoord.lng,
-          reqVehicleType: String(d.reqVehicleType || "舒适型") as "舒适型" | "豪华型" | "商务型" | "经济型",
+          reqVehicleType: String(d.reqVehicleType || "舒适型") as "豪华商务型" | "普通商务型" | "豪华型" | "舒适型" | "经济型" | "商务型",
           status: 0,
           driverName: d.driverName ? String(d.driverName) : undefined,
           isEmergency: Boolean(d.isEmergency),

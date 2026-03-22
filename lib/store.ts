@@ -102,6 +102,11 @@ export async function deleteOrder(id: string): Promise<void> {
   await fetch(`/api/orders/${id}`, { method: 'DELETE' })
 }
 
+/** 撤销派单：将订单状态重置为待排单，清空司机信息 */
+export async function cancelDispatch(orderId: string): Promise<Order> {
+  return updateOrder(orderId, { status: 0, driverId: null, driverName: null })
+}
+
 export async function cancelOrder(orderId: string, reason: string): Promise<Order | null> {
   const order = await getOrderById(orderId)
   if (!order) return null

@@ -37,8 +37,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { getDrivers, updateDriver, deleteDriver } from '@/lib/store'
-import type { Driver, DriverStatus } from '@/lib/types'
-import { DRIVER_STATUS_LABELS, VEHICLE_TYPE_LABELS } from '@/lib/types'
+import type { Driver, DriverStatus, VehicleType } from '@/lib/types'
+import { DRIVER_STATUS_LABELS, VEHICLE_TYPE_LABELS, VEHICLE_TYPE_OPTIONS, VEHICLE_TYPE_COLORS } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -57,6 +57,9 @@ import {
   AlertCircle,
   X,
   Loader2,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from 'lucide-react'
 
 const STATUS_COLORS: Record<DriverStatus, string> = {
@@ -64,6 +67,20 @@ const STATUS_COLORS: Record<DriverStatus, string> = {
   busy: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   off_duty: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
   on_leave: 'bg-red-500/20 text-red-400 border-red-500/30',
+}
+
+const VEHICLE_TYPE_ORDER: Record<string, number> = {
+  '豪华商务型': 0, '普通商务型': 1, '豪华型': 2, '舒适型': 3, '经济型': 4, '商务型': 5,
+}
+const STATUS_ORDER: Record<string, number> = {
+  available: 0, busy: 1, off_duty: 2, on_leave: 3,
+}
+
+type SortField = 'name' | 'vehiclePlate' | 'vehicleType' | 'workingHours' | 'status'
+
+function SortIcon({ field, sortField, sortDir }: { field: SortField; sortField: SortField | null; sortDir: 'asc' | 'desc' }) {
+  if (sortField !== field) return <ChevronsUpDown className="w-3 h-3 opacity-40" />
+  return sortDir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
 }
 
 interface ImportResult {
@@ -84,6 +101,17 @@ export default function DriversPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
   const [batchMode, setBatchMode] = useState(false)
+  const [sortField, setSortField] = useState<SortField | null>(null)
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortDir('asc')
+    }
+  }
 
   // xlsx import state
   const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -104,7 +132,7 @@ export default function DriversPage() {
   }, [])
 
   useEffect(() => {
-    let result = drivers
+    let result = [...drivers]
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
@@ -124,11 +152,33 @@ export default function DriversPage() {
       result = result.filter(d => d.vehicleType === vehicleFilter)
     }
 
+    if (sortField) {
+      result.sort((a, b) => {
+        let cmp = 0
+        if (sortField === 'name')         cmp = a.name.localeCompare(b.name, 'zh-CN')
+        if (sortField === 'vehiclePlate') cmp = a.vehiclePlate.localeCompare(b.vehiclePlate)
+        if (sortField === 'vehicleType')  cmp = (VEHICLE_TYPE_ORDER[a.vehicleType] ?? 9) - (VEHICLE_TYPE_ORDER[b.vehicleType] ?? 9)
+        if (sortField === 'workingHours') cmp = (a.workingHours ?? '').localeCompare(b.workingHours ?? '')
+        if (sortField === 'status')       cmp = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9)
+        return sortDir === 'asc' ? cmp : -cmp
+      })
+    }
+
     setFilteredDrivers(result)
-  }, [drivers, searchQuery, statusFilter, vehicleFilter])
+  }, [drivers, searchQuery, statusFilter, vehicleFilter, sortField, sortDir])
 
   const handleStatusChange = async (driverId: string, newStatus: DriverStatus) => {
     await updateDriver(driverId, { status: newStatus })
+    await loadDrivers()
+  }
+
+  const handleVehicleTypeChange = async (driverId: string, newType: VehicleType) => {
+    await updateDriver(driverId, { vehicleType: newType })
+    await loadDrivers()
+  }
+
+  const handleSetAllFree = async () => {
+    await Promise.all(drivers.map(d => d.status !== 'available' ? updateDriver(d.id, { status: 'available' }) : Promise.resolve()))
     await loadDrivers()
   }
 
@@ -253,6 +303,9 @@ export default function DriversPage() {
               批量删除
             </Button>
           )}
+          <Button variant="outline" onClick={handleSetAllFree}>
+            一键全部空闲
+          </Button>
           <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
             <Upload className="w-4 h-4 mr-2" />
             导入 Excel
@@ -298,8 +351,13 @@ export default function DriversPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部车型</SelectItem>
-                {Object.entries(VEHICLE_TYPE_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                {VEHICLE_TYPE_OPTIONS.map(t => (
+                  <SelectItem key={t} value={t}>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[t]}`} />
+                      {t}
+                    </div>
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -325,10 +383,25 @@ export default function DriversPage() {
                       className={cn("border-muted-foreground/60", !batchMode && "invisible")}
                     />
                   </th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">司机信息</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">车辆信息</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">工作时间</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">状态</th>
+                  {(
+                    [
+                      { label: '司机信息', field: 'name' },
+                      { label: '车牌号',   field: 'vehiclePlate' },
+                      { label: '车型',     field: 'vehicleType' },
+                      { label: '工作时间', field: 'workingHours' },
+                      { label: '状态',     field: 'status' },
+                    ] as { label: string; field: SortField }[]
+                  ).map(col => (
+                    <th key={col.field} className="text-left py-3 px-4">
+                      <button
+                        onClick={() => handleSort(col.field)}
+                        className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {col.label}
+                        <SortIcon field={col.field} sortField={sortField} sortDir={sortDir} />
+                      </button>
+                    </th>
+                  ))}
                   <th className="text-right py-3 px-4 text-sm font-medium text-muted-foreground">操作</th>
                 </tr>
               </thead>
@@ -361,14 +434,32 @@ export default function DriversPage() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        <Car className="w-4 h-4 text-muted-foreground" />
-                        <div>
-                          <p className="text-foreground">{driver.vehiclePlate}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {VEHICLE_TYPE_LABELS[driver.vehicleType]}
-                          </p>
-                        </div>
+                        <Car className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="font-mono text-sm text-foreground">{driver.vehiclePlate}</span>
                       </div>
+                    </td>
+                    <td className="py-3 px-4">
+                      <Select
+                        value={driver.vehicleType}
+                        onValueChange={(value) => handleVehicleTypeChange(driver.id, value as VehicleType)}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-[120px] border border-muted-foreground/30">
+                          <div className="flex items-center gap-1.5 overflow-hidden">
+                            <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[driver.vehicleType as keyof typeof VEHICLE_TYPE_COLORS] ?? 'bg-muted'}`} />
+                            <span className="truncate">{driver.vehicleType}</span>
+                          </div>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {VEHICLE_TYPE_OPTIONS.map(t => (
+                            <SelectItem key={t} value={t} className="text-xs">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[t]}`} />
+                                {t}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </td>
                     <td className="py-3 px-4">
                       <span className="text-sm text-foreground font-mono">
@@ -427,7 +518,7 @@ export default function DriversPage() {
                 ))}
                 {filteredDrivers.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-muted-foreground">
+                    <td colSpan={7} className="py-12 text-center text-muted-foreground">
                       暂无数据
                     </td>
                   </tr>

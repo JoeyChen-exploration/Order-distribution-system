@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   Zap,
@@ -15,6 +15,7 @@ import {
   BarChart3,
   CalendarIcon,
   UserCheck,
+  X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -46,14 +47,25 @@ import { cn } from "@/lib/utils"
 import { format } from "date-fns"
 import { zhCN } from "date-fns/locale"
 import { getOrders, getDrivers, updateOrder, updateDriver } from "@/lib/store"
-import { runDispatchAlgorithm, batchDispatch, type DispatchResult } from "@/lib/dispatch-engine"
+import { runDispatchAlgorithm, batchDispatch, type DispatchResult, type TravelTimeCache } from "@/lib/dispatch-engine"
 import type { Order, Driver } from "@/lib/types"
+import { VEHICLE_TYPE_COLORS, VEHICLE_TYPE_OPTIONS } from "@/lib/types"
 
-const vehicleTypeColors: Record<string, string> = {
-  "舒适型": "bg-blue-500",
-  "豪华型": "bg-amber-500",
-  "商务型": "bg-purple-500",
-  "经济型": "bg-green-500",
+const serviceTypeConfig: Record<string, { border: string; text: string; bg: string }> = {
+  "接机/站": { border: "border-sky-500",     text: "text-sky-400",     bg: "bg-sky-500/10" },
+  "送机/站": { border: "border-amber-500",   text: "text-amber-400",   bg: "bg-amber-500/10" },
+  "包车":    { border: "border-emerald-500", text: "text-emerald-400", bg: "bg-emerald-500/10" },
+  "市内约车": { border: "border-violet-500",  text: "text-violet-400",  bg: "bg-violet-500/10" },
+}
+
+function ServiceTypeBadge({ value, charterHours }: { value: string; charterHours?: string }) {
+  const cfg = serviceTypeConfig[value]
+  if (!cfg) return <span className="text-xs text-muted-foreground">{value || "-"}</span>
+  return (
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[11px] font-medium w-fit ${cfg.border} ${cfg.text} ${cfg.bg}`}>
+      {value}{charterHours ? `·${charterHours}h` : ""}
+    </span>
+  )
 }
 
 export default function DispatchPage() {
@@ -69,6 +81,8 @@ export default function DispatchPage() {
   const [batchResults, setBatchResults] = useState<Map<string, DispatchResult> | null>(null)
   const [showResultDialog, setShowResultDialog] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [dispatchProgress, setDispatchProgress] = useState<{ phase: string; current: number; total: number } | null>(null)
+  const cancelledRef = useRef(false)
   const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined)
   const [orderSearch, setOrderSearch] = useState("")
   const [batchMode, setBatchMode] = useState(false)
@@ -118,7 +132,11 @@ export default function DispatchPage() {
         (o.pickupAddress || "").toLowerCase().includes(q)
       )
     }
-    return list
+    return [...list].sort((a, b) => {
+      const dateA = `${a.flightDate} ${a.pickupTime || ""}`.trim()
+      const dateB = `${b.flightDate} ${b.pickupTime || ""}`.trim()
+      return dateA.localeCompare(dateB)
+    })
   }, [pendingOrders, dateFilter, orderSearch])
 
   const stats = useMemo(() => {
@@ -158,10 +176,29 @@ export default function DispatchPage() {
     setSelectedOrders(newSelected)
   }
 
-  const handleSingleDispatch = (order: Order) => {
-    // 同时包含 available 和 busy 司机（busy 司机可排未来时段的单，时间冲突由算法检查）
+  const handleSingleDispatch = async (order: Order) => {
     const candidateDrivers = drivers.filter(d => d.status === "available" || d.status === "busy")
-    const result = runDispatchAlgorithm(order, candidateDrivers, allOrders)
+
+    // Pre-fetch driver → pickup travel times for single dispatch too
+    const travelCache: TravelTimeCache = new Map()
+    if (order.pickupLat && order.pickupLng) {
+      await Promise.all(candidateDrivers.map(async driver => {
+        const driverOrders = allOrders.filter(
+          o => o.driverId === driver.id && o.flightDate === order.flightDate && (o.status === 1 || o.status === 2)
+        ).sort((a, b) => b.pickupTime.localeCompare(a.pickupTime))
+        const fromLat = driverOrders[0]?.dropoffLat || driver.homeLat
+        const fromLng = driverOrders[0]?.dropoffLng || driver.homeLng
+        if (!fromLat || !fromLng) return
+        const key = `${fromLng},${fromLat}->${order.pickupLng},${order.pickupLat}`
+        try {
+          const res = await fetch(`/api/maps/drivetime?originLng=${fromLng}&originLat=${fromLat}&destLng=${order.pickupLng}&destLat=${order.pickupLat}&pickupTime=${encodeURIComponent(order.pickupTime)}`)
+          const data = await res.json()
+          if (data.durationMinutes > 0) travelCache.set(key, data.durationMinutes)
+        } catch {}
+      }))
+    }
+
+    const result = runDispatchAlgorithm(order, candidateDrivers, allOrders, travelCache)
     setCurrentResult(result)
     setShowResultDialog(true)
   }
@@ -176,13 +213,104 @@ export default function DispatchPage() {
     setShowManualDialog(true)
   }
 
+  const handleCancelProcessing = () => {
+    cancelledRef.current = true
+    setIsProcessing(false)
+    setDispatchProgress(null)
+    setBatchResults(null)
+    setBatchMode(false)
+    setSelectedOrders(new Set())
+  }
+
   const handleBatchDispatch = async () => {
     if (selectedOrders.size === 0) return
-    setIsProcessing(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
+
     const ordersToDispatch = filteredOrders.filter(o => selectedOrders.has(o.id))
+
+    // 检查是否有未完成必选项的订单
+    const unclassifiedBusiness = ordersToDispatch.filter(o => {
+      if (o.reqVehicleType !== "商务型") return false
+      try { const m = JSON.parse(o.metadata || "{}"); return !m["商务类型"] } catch { return true }
+    })
+    const unconfirmedCharter = ordersToDispatch.filter(o => {
+      try { const m = JSON.parse(o.metadata || "{}"); return (m["服务类型"] === "包车" || m.serviceType === "包车") && !m["包车时长"] } catch { return false }
+    })
+    if (unclassifiedBusiness.length > 0 || unconfirmedCharter.length > 0) {
+      const nos = [...unclassifiedBusiness.map(o => o.orderNo), ...unconfirmedCharter.map(o => o.orderNo)]
+      alert(`以下订单有待确认项，请先在订单管理中完成选择后再派单：\n${nos.join("\n")}`)
+      return
+    }
+
+    cancelledRef.current = false
+    setIsProcessing(true)
     const candidateDrivers = drivers.filter(d => d.status === "available" || d.status === "busy")
-    const results = batchDispatch(ordersToDispatch, candidateDrivers, allOrders)
+
+    // ── Phase 1: Build deduplicated route task list ───────────────────────────
+    const travelCache: TravelTimeCache = new Map()
+    const seen = new Set<string>()
+    // Tasks are thunks so we control when each request fires (for rate limiting)
+    const routeTasks: Array<() => Promise<void>> = []
+
+    for (const order of ordersToDispatch) {
+      if (!order.pickupLat || !order.pickupLng) continue
+      for (const driver of candidateDrivers) {
+        const driverOrders = allOrders.filter(
+          o => o.driverId === driver.id && o.flightDate === order.flightDate && (o.status === 1 || o.status === 2)
+        ).sort((a, b) => b.pickupTime.localeCompare(a.pickupTime))
+        const fromLat = driverOrders[0]?.dropoffLat || driver.homeLat
+        const fromLng = driverOrders[0]?.dropoffLng || driver.homeLng
+        if (!fromLat || !fromLng) continue
+        const key = `${fromLng},${fromLat}->${order.pickupLng},${order.pickupLat}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        routeTasks.push(() =>
+          fetch(`/api/maps/drivetime?originLng=${fromLng}&originLat=${fromLat}&destLng=${order.pickupLng}&destLat=${order.pickupLat}&pickupTime=${encodeURIComponent(order.pickupTime)}`)
+            .then(r => r.json())
+            .then(data => { if (data.durationMinutes > 0) travelCache.set(key, data.durationMinutes) })
+            .catch(() => {})
+        )
+      }
+    }
+
+    // ── Phase 2: Fetch routes with QPS limiting (max 3 concurrent) ───────────
+    const totalRoutes = routeTasks.length
+    if (totalRoutes > 0) {
+      setDispatchProgress({ phase: "prefetch", current: 0, total: totalRoutes })
+      let completed = 0
+      const QPS = 3  // Amap free tier limit
+
+      // Concurrency-limited runner: keep exactly QPS tasks in-flight at all times
+      await new Promise<void>(resolve => {
+        let started = 0
+        let finished = 0
+
+        function startNext() {
+          if (cancelledRef.current) { resolve(); return }
+          while (started < routeTasks.length && started - finished < QPS) {
+            const task = routeTasks[started++]
+            task().then(() => {
+              finished++
+              completed++
+              if (cancelledRef.current) { resolve(); return }
+              setDispatchProgress({ phase: "prefetch", current: completed, total: totalRoutes })
+              if (finished === routeTasks.length) resolve()
+              else startNext()
+            })
+          }
+        }
+        startNext()
+      })
+    }
+
+    if (cancelledRef.current) return
+
+    // ── Phase 3: Run algorithm ────────────────────────────────────────────────
+    setDispatchProgress({ phase: "dispatch", current: 0, total: ordersToDispatch.length })
+    const results = batchDispatch(ordersToDispatch, candidateDrivers, allOrders, travelCache)
+
+    if (cancelledRef.current) return
+
+    setDispatchProgress(null)
     setBatchResults(results)
     setIsProcessing(false)
   }
@@ -480,11 +608,7 @@ export default function DispatchPage() {
                     onClick={handleBatchDispatch}
                     disabled={selectedOrders.size === 0 || isProcessing}
                   >
-                    {isProcessing ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Zap className="mr-2 h-4 w-4" />
-                    )}
+                    <Zap className="mr-2 h-4 w-4" />
                     确认派单 ({selectedOrders.size})
                   </Button>
                   <Button
@@ -519,13 +643,14 @@ export default function DispatchPage() {
                 <TableHead>服务时间</TableHead>
                 <TableHead>地点</TableHead>
                 <TableHead>车型</TableHead>
+                <TableHead>服务类型</TableHead>
                 <TableHead className="w-[160px]">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredOrders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                     {pendingOrders.length === 0 ? "暂无待派单订单" : "当前日期无待派单订单"}
                   </TableCell>
                 </TableRow>
@@ -556,9 +681,17 @@ export default function DispatchPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
-                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${vehicleTypeColors[order.reqVehicleType] ?? "bg-muted"}`} />
+                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[order.reqVehicleType as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
                         {order.reqVehicleType}
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const meta = order.metadata ? JSON.parse(order.metadata) : {}
+                        const svcType = meta["服务类型"] || meta.serviceType || ""
+                        const charterHours = meta["包车时长"]
+                        return <ServiceTypeBadge value={svcType} charterHours={charterHours} />
+                      })()}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
@@ -674,6 +807,59 @@ export default function DispatchPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Batch Dispatch Progress Dialog */}
+      <Dialog open={isProcessing} onOpenChange={open => { if (!open) handleCancelProcessing() }}>
+        <DialogContent className="max-w-sm" onPointerDownOutside={e => e.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              正在计算派单...
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            {dispatchProgress?.phase === "prefetch" && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">预取路线数据</span>
+                  <span className="font-mono text-sm">
+                    {dispatchProgress.current} / {dispatchProgress.total}
+                  </span>
+                </div>
+                <Progress
+                  value={dispatchProgress.total > 0 ? (dispatchProgress.current / dispatchProgress.total) * 100 : 0}
+                  className="h-2"
+                />
+                <p className="text-xs text-muted-foreground">
+                  正在调用高德地图 API 获取实时行驶时间...
+                </p>
+              </div>
+            )}
+            {dispatchProgress?.phase === "dispatch" && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">计算最优派单方案</span>
+                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                </div>
+                <Progress value={100} className="h-2 animate-pulse" />
+                <p className="text-xs text-muted-foreground">
+                  正在为 {dispatchProgress.total} 条订单匹配最佳司机...
+                </p>
+              </div>
+            )}
+            {!dispatchProgress && (
+              <div className="flex items-center justify-center py-2">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end pt-2 border-t">
+            <Button variant="outline" size="sm" onClick={handleCancelProcessing}>
+              取消派单
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Manual Dispatch Dialog */}
       <Dialog open={showManualDialog} onOpenChange={setShowManualDialog}>
         <DialogContent className="max-w-xl">
@@ -703,10 +889,14 @@ export default function DispatchPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">全部车型</SelectItem>
-                    <SelectItem value="舒适型">舒适型</SelectItem>
-                    <SelectItem value="豪华型">豪华型</SelectItem>
-                    <SelectItem value="商务型">商务型</SelectItem>
-                    <SelectItem value="经济型">经济型</SelectItem>
+                    {VEHICLE_TYPE_OPTIONS.map(t => (
+                      <SelectItem key={t} value={t}>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[t]}`} />
+                          {t}
+                        </div>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <Select value={manualShiftFilter} onValueChange={v => setManualShiftFilter(v as "all" | "day" | "night")}>
@@ -762,7 +952,10 @@ export default function DispatchPage() {
                           )}>
                             {driver.status === "available" ? "空闲" : driver.status === "busy" ? "忙碌" : "休息"}
                           </span>
-                          <span className="text-muted-foreground">{driver.vehicleType}</span>
+                          <span className="flex items-center gap-1">
+                            <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[driver.vehicleType as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
+                            <span className="text-muted-foreground">{driver.vehicleType}</span>
+                          </span>
                           {selectedDriverId === driver.id && <CheckCircle2 className="h-4 w-4 text-primary" />}
                         </div>
                         {driver.workingHours && (

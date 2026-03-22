@@ -15,16 +15,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field"
-import { store } from "@/lib/store"
-import type { ServiceType, VehicleType } from "@/lib/types"
+import { createOrder } from "@/lib/store"
+import type { VehicleType } from "@/lib/types"
 
 export default function CreateOrderPage() {
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [charterHours, setCharterHours] = useState<4 | 8>(4)
   const [formData, setFormData] = useState({
     passengerName: "",
     passengerPhone: "",
-    serviceType: "" as ServiceType | "",
+    serviceType: "",
     serviceDate: "",
     serviceTime: "",
     pickupLocation: "",
@@ -32,9 +33,7 @@ export default function CreateOrderPage() {
     vehicleType: "" as VehicleType | "",
     flightNumber: "",
     passengerCount: "1",
-    luggageCount: "0",
     notes: "",
-    specialRequirements: "",
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
 
@@ -87,20 +86,28 @@ export default function CreateOrderPage() {
     setIsSubmitting(true)
     
     try {
-      store.addOrder({
+      const meta: Record<string, string> = {}
+      if (formData.serviceType) meta["服务类型"] = formData.serviceType
+      if (formData.serviceType === "包车") meta["包车时长"] = String(charterHours)
+      if (formData.passengerCount) meta["passengerCount"] = formData.passengerCount
+      if (formData.notes) meta["remarks"] = formData.notes
+
+      await createOrder({
+        orderNo: `MAN-${Date.now()}`,
         passengerName: formData.passengerName,
         passengerPhone: formData.passengerPhone,
-        serviceType: formData.serviceType as ServiceType,
-        serviceDate: formData.serviceDate,
-        serviceTime: formData.serviceTime,
-        pickupLocation: formData.pickupLocation,
-        dropoffLocation: formData.dropoffLocation,
-        vehicleType: formData.vehicleType as VehicleType,
-        flightNumber: formData.flightNumber || undefined,
-        passengerCount: parseInt(formData.passengerCount) || 1,
-        luggageCount: parseInt(formData.luggageCount) || 0,
-        notes: formData.notes || undefined,
-        specialRequirements: formData.specialRequirements || undefined,
+        flightNo: formData.flightNumber || "",
+        flightDate: formData.serviceDate,
+        pickupTime: formData.serviceTime,
+        pickupAddress: formData.pickupLocation,
+        pickupLat: 0, pickupLng: 0,
+        dropoffAddress: formData.dropoffLocation,
+        dropoffLat: 0, dropoffLng: 0,
+        reqVehicleType: (formData.vehicleType || "舒适型") as VehicleType,
+        status: 0,
+        isEmergency: false,
+        importBatchId: null,
+        metadata: Object.keys(meta).length > 0 ? JSON.stringify(meta) : undefined,
       })
       
       router.push("/orders")
@@ -181,16 +188,6 @@ export default function CreateOrderPage() {
                       onChange={(e) => updateField("passengerCount", e.target.value)}
                     />
                   </Field>
-                  <Field>
-                    <FieldLabel>行李数量</FieldLabel>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="50"
-                      value={formData.luggageCount}
-                      onChange={(e) => updateField("luggageCount", e.target.value)}
-                    />
-                  </Field>
                 </div>
               </FieldGroup>
             </CardContent>
@@ -215,12 +212,35 @@ export default function CreateOrderPage() {
                         <SelectValue placeholder="选择服务类型" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="pickup">接机</SelectItem>
-                        <SelectItem value="dropoff">送机</SelectItem>
+                        <SelectItem value="接机/站">接机/站</SelectItem>
+                        <SelectItem value="送机/站">送机/站</SelectItem>
+                        <SelectItem value="包车">包车</SelectItem>
+                        <SelectItem value="市内约车">市内约车</SelectItem>
                       </SelectContent>
                     </Select>
                     {errors.serviceType && (
                       <p className="text-xs text-destructive">{errors.serviceType}</p>
+                    )}
+                    {formData.serviceType === "包车" && (
+                      <div className="mt-2 flex items-center gap-3">
+                        <span className="text-xs text-muted-foreground">包车时长：</span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setCharterHours(4)}
+                            className={`text-xs px-3 py-1.5 rounded border transition-colors ${charterHours === 4 ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:border-primary/50"}`}
+                          >
+                            4 小时
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCharterHours(8)}
+                            className={`text-xs px-3 py-1.5 rounded border transition-colors ${charterHours === 8 ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:border-primary/50"}`}
+                          >
+                            8 小时
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </Field>
                   <Field>
@@ -326,14 +346,6 @@ export default function CreateOrderPage() {
             </CardHeader>
             <CardContent>
               <FieldGroup>
-                <Field>
-                  <FieldLabel>特殊要求</FieldLabel>
-                  <Input
-                    placeholder="例如：需要儿童座椅、轮椅等"
-                    value={formData.specialRequirements}
-                    onChange={(e) => updateField("specialRequirements", e.target.value)}
-                  />
-                </Field>
                 <Field>
                   <FieldLabel>备注</FieldLabel>
                   <Textarea

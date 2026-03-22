@@ -21,6 +21,9 @@ import {
   Trash2,
   CalendarIcon,
   Download,
+  Ban,
+  Loader2,
+  HelpCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -64,8 +67,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { getOrders, getDrivers, updateOrder } from "@/lib/store"
+import { getOrders, getDrivers, updateOrder, updateDriver, cancelDispatch } from "@/lib/store"
 import type { Order, OrderStatus } from "@/lib/types"
+import { VEHICLE_TYPE_OPTIONS, VEHICLE_TYPE_COLORS } from "@/lib/types"
 import { OrderImportDialog } from "@/components/order-import-dialog"
 
 const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -77,35 +81,40 @@ const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "s
   5: { label: "空单", variant: "outline" },
 }
 
-const vehicleTypeLabels: Record<string, string> = {
-  "舒适型": "舒适型",
-  "豪华型": "豪华型",
-  "商务型": "商务型",
-  "经济型": "经济型",
+const serviceTypeConfig: Record<string, { border: string; text: string; bg: string }> = {
+  "接机/站": { border: "border-sky-500",     text: "text-sky-400",     bg: "bg-sky-500/10" },
+  "送机/站": { border: "border-amber-500",   text: "text-amber-400",   bg: "bg-amber-500/10" },
+  "包车":    { border: "border-emerald-500", text: "text-emerald-400", bg: "bg-emerald-500/10" },
+  "市内约车": { border: "border-violet-500",  text: "text-violet-400",  bg: "bg-violet-500/10" },
 }
 
-const vehicleTypeColors: Record<string, string> = {
-  "舒适型": "bg-blue-500",
-  "豪华型": "bg-amber-500",
-  "商务型": "bg-purple-500",
-  "经济型": "bg-green-500",
-}
-
-const serviceTypeConfig: Record<string, { dot: string; text: string }> = {
-  "接机/站": { dot: "bg-sky-500",    text: "text-sky-400" },
-  "送机/站": { dot: "bg-amber-500",  text: "text-amber-400" },
-  "包车":    { dot: "bg-emerald-500", text: "text-emerald-400" },
-}
-
-function ServiceTypeBadge({ value }: { value: string }) {
+function ServiceTypeBadge({ value, charterHours }: { value: string; charterHours?: string }) {
   const cfg = serviceTypeConfig[value]
+  const needsCharterConfirm = value === "包车" && !charterHours
   if (!cfg) return <span className="text-xs text-muted-foreground">{value || "-"}</span>
   return (
-    <div className="flex items-center gap-1.5">
-      <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${cfg.dot}`} />
-      <span className={`text-xs ${cfg.text}`}>{value}</span>
+    <div className="flex flex-col gap-0.5">
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[11px] font-medium w-fit ${cfg.border} ${cfg.text} ${cfg.bg}`}>
+        {value}{charterHours ? `·${charterHours}h` : ""}
+      </span>
+      {needsCharterConfirm && (
+        <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/20 text-orange-400 w-fit">
+          待确认时长
+        </span>
+      )}
     </div>
   )
+}
+
+type FlightStatusType = "on_time" | "delayed" | "cancelled" | "landed" | "unknown"
+interface FlightStatus { status: FlightStatusType; message: string; delayMinutes: number }
+
+function FlightStatusBadge({ fs }: { fs: FlightStatus }) {
+  if (fs.status === "on_time")   return <span className="text-[10px] px-1 py-0.5 rounded bg-green-500/15 text-green-400">正常</span>
+  if (fs.status === "delayed")   return <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400">延误{fs.delayMinutes}分</span>
+  if (fs.status === "cancelled") return <span className="text-[10px] px-1 py-0.5 rounded bg-red-500/15 text-red-400">取消</span>
+  if (fs.status === "landed")    return <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400">已落地</span>
+  return null
 }
 
 const METADATA_LABELS: Record<string, string> = {
@@ -148,6 +157,9 @@ export default function OrdersPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
+  const [cancelAllOpen, setCancelAllOpen] = useState(false)
+  const [flightStatuses, setFlightStatuses] = useState<Map<string, FlightStatus>>(new Map())
+  const [loadingFlights, setLoadingFlights] = useState(false)
   const pageSize = 50
 
   useEffect(() => {
@@ -239,6 +251,58 @@ export default function OrdersPage() {
     setOrders(await getOrders())
   }
 
+  const handleCancelDispatch = async (orderId: string) => {
+    await cancelDispatch(orderId)
+    setOrders(await getOrders())
+  }
+
+  const handleCancelAllDispatches = async () => {
+    const toCancel = orders.filter(o => o.status === 1)
+    // collect unique driverIds before clearing
+    const affectedDriverIds = [...new Set(toCancel.map(o => o.driverId).filter(Boolean) as string[])]
+    await Promise.all(toCancel.map(o => cancelDispatch(o.id)))
+    // reset affected drivers back to available
+    await Promise.all(affectedDriverIds.map(id => updateDriver(id, { status: "available" })))
+    setOrders(await getOrders())
+    setCancelAllOpen(false)
+  }
+
+  const handleSetCharterHours = async (orderId: string, hours: 4 | 8, currentMeta: string) => {
+    const meta = currentMeta ? JSON.parse(currentMeta) : {}
+    meta["包车时长"] = String(hours)
+    await updateOrder(orderId, { metadata: JSON.stringify(meta) })
+    setOrders(await getOrders())
+  }
+
+  const handleSetBusinessType = async (orderId: string, type: "豪华商务型" | "普通商务型", currentMeta: string) => {
+    const meta = currentMeta ? JSON.parse(currentMeta) : {}
+    meta["商务类型"] = type
+    await updateOrder(orderId, { metadata: JSON.stringify(meta) })
+    setOrders(await getOrders())
+  }
+
+  const refreshFlightStatuses = async () => {
+    setLoadingFlights(true)
+    const keys = new Set(
+      filteredOrders
+        .filter(o => o.flightNo)
+        .map(o => `${o.flightNo}|${o.flightDate}`)
+    )
+    const newStatuses = new Map(flightStatuses)
+    await Promise.all(
+      Array.from(keys).map(async key => {
+        const [flightNo, date] = key.split("|")
+        try {
+          const res = await fetch(`/api/flights/status?flightNo=${encodeURIComponent(flightNo)}&date=${date}`)
+          const data = await res.json()
+          newStatuses.set(key, data)
+        } catch {}
+      })
+    )
+    setFlightStatuses(new Map(newStatuses))
+    setLoadingFlights(false)
+  }
+
   const handleExport = async () => {
     const XLSX = await import("xlsx")
     const dispatched = orders
@@ -324,6 +388,16 @@ export default function OrdersPage() {
               批量删除
             </Button>
           )}
+          {orders.some(o => o.status === 1) && (
+            <Button variant="outline" onClick={() => setCancelAllOpen(true)}>
+              <Ban className="mr-2 h-4 w-4" />
+              取消全部派单
+            </Button>
+          )}
+          <Button variant="outline" onClick={refreshFlightStatuses} disabled={loadingFlights}>
+            {loadingFlights ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            刷新航班
+          </Button>
           <Button variant="outline" onClick={handleExport}>
             <Download className="mr-2 h-4 w-4" />
             导出排单
@@ -381,6 +455,57 @@ export default function OrdersPage() {
         </Card>
       </div>
 
+      {/* Charter hours warning */}
+      {(() => {
+        const pending = orders.filter(o => {
+          const m = o.metadata ? JSON.parse(o.metadata) : {}
+          return (m["服务类型"] === "包车" || m.serviceType === "包车") && !m["包车时长"]
+        })
+        if (pending.length === 0) return null
+        return (
+          <div className="flex flex-wrap items-start gap-2 rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-3">
+            <span className="text-orange-400 text-sm font-medium shrink-0">⚠ 以下包车订单未选择时长，无法参与派单：</span>
+            <div className="flex flex-wrap gap-2">
+              {pending.map(o => (
+                <button
+                  key={o.id}
+                  onClick={() => { setSearchQuery(o.orderNo); setCurrentPage(1) }}
+                  className="text-xs px-2 py-0.5 rounded border border-orange-500/50 text-orange-300 hover:bg-orange-500/20 transition-colors font-mono"
+                >
+                  {o.orderNo}
+                </button>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Business type warning */}
+      {(() => {
+        const pending = orders.filter(o => {
+          if (o.reqVehicleType !== "商务型") return false
+          const m = o.metadata ? JSON.parse(o.metadata) : {}
+          return !m["商务类型"]
+        })
+        if (pending.length === 0) return null
+        return (
+          <div className="flex flex-wrap items-start gap-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3">
+            <span className="text-yellow-400 text-sm font-medium shrink-0">⚠ 以下商务型订单未选择豪华商务/普通商务，无法参与派单：</span>
+            <div className="flex flex-wrap gap-2">
+              {pending.map(o => (
+                <button
+                  key={o.id}
+                  onClick={() => { setSearchQuery(o.orderNo); setCurrentPage(1) }}
+                  className="text-xs px-2 py-0.5 rounded border border-yellow-500/50 text-yellow-300 hover:bg-yellow-500/20 transition-colors font-mono"
+                >
+                  {o.orderNo}
+                </button>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Filters */}
       <Card>
         <CardContent className="pt-6">
@@ -412,10 +537,10 @@ export default function OrdersPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部车型</SelectItem>
-                  {Object.keys(vehicleTypeLabels).map(type => (
+                  {VEHICLE_TYPE_OPTIONS.map(type => (
                     <SelectItem key={type} value={type}>
                       <div className="flex items-center gap-1.5">
-                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${vehicleTypeColors[type]}`} />
+                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[type]}`} />
                         {type}
                       </div>
                     </SelectItem>
@@ -456,7 +581,7 @@ export default function OrdersPage() {
       {/* Orders Table */}
       <Card>
         <CardContent className="p-0">
-          <Table>
+          <Table className="table-fixed w-full">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[40px]">
@@ -466,22 +591,21 @@ export default function OrdersPage() {
                     className={cn("border-muted-foreground/60", !batchMode && "invisible")}
                   />
                 </TableHead>
-                <TableHead className="w-[180px]">订单号</TableHead>
-                <TableHead>航班/时间</TableHead>
+                <TableHead className="w-[150px]">订单号</TableHead>
+                <TableHead className="w-[140px]">航班/时间</TableHead>
                 <TableHead>地点</TableHead>
-                <TableHead>车型</TableHead>
-                <TableHead>服务标准</TableHead>
-                <TableHead>服务类型</TableHead>
-                <TableHead>人数</TableHead>
-                <TableHead>司机</TableHead>
-                <TableHead>状态</TableHead>
+                <TableHead className="w-[80px]">车型</TableHead>
+                <TableHead className="w-[110px]">服务类型</TableHead>
+                <TableHead className="w-[50px]">人数</TableHead>
+                <TableHead className="w-[90px]">司机</TableHead>
+                <TableHead className="w-[80px]">状态</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedOrders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                     暂无订单数据
                   </TableCell>
                 </TableRow>
@@ -510,32 +634,70 @@ export default function OrdersPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex flex-col">
-                            {order.flightNo && <span className="font-medium">{order.flightNo}</span>}
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5">
+                              {order.flightNo && <span className="font-medium">{order.flightNo}</span>}
+                              {(() => {
+                                const key = `${order.flightNo}|${order.flightDate}`
+                                const fs = flightStatuses.get(key)
+                                return fs ? <FlightStatusBadge fs={fs} /> : null
+                              })()}
+                            </div>
                             <span className="text-xs text-muted-foreground">
                               {order.flightDate}{order.pickupTime ? ` ${order.pickupTime}` : ""}
                             </span>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex flex-col max-w-[200px]">
-                            <span className="truncate text-xs" title={order.pickupAddress}>
-                              <MapPin className="inline h-3 w-3 mr-1" />
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs break-words leading-snug">
+                              <MapPin className="inline h-3 w-3 mr-1 shrink-0" />
                               {order.pickupAddress}
                             </span>
-                            <span className="truncate text-xs text-muted-foreground" title={order.dropoffAddress}>
+                            <span className="text-xs text-muted-foreground break-words leading-snug">
                               → {order.dropoffAddress}
                             </span>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${vehicleTypeColors[order.reqVehicleType] ?? "bg-muted"}`} />
-                            {vehicleTypeLabels[order.reqVehicleType] ?? order.reqVehicleType}
-                          </div>
+                          {order.reqVehicleType === "商务型" ? (
+                            meta["商务类型"] ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[meta["商务类型"] as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
+                                <span className="text-sm">{meta["商务类型"]}</span>
+                              </div>
+                            ) : (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="flex items-center gap-1 text-yellow-400 hover:text-yellow-300 transition-colors group"
+                                  >
+                                    <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+                                    <span className="text-sm">商务型</span>
+                                    <ChevronDown className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="start">
+                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "豪华商务型", order.metadata ?? "") }}>
+                                    <span className="inline-block w-2 h-2 rounded-sm shrink-0 bg-purple-500 mr-2" />
+                                    豪华商务型
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "普通商务型", order.metadata ?? "") }}>
+                                    <span className="inline-block w-2 h-2 rounded-sm shrink-0 bg-fuchsia-500 mr-2" />
+                                    普通商务型
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[order.reqVehicleType as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
+                              {order.reqVehicleType}
+                            </div>
+                          )}
                         </TableCell>
-                        <TableCell className="text-xs">{meta.serviceStandard || "-"}</TableCell>
-                        <TableCell><ServiceTypeBadge value={meta["服务类型"] || meta.serviceType || ""} /></TableCell>
+                        <TableCell><ServiceTypeBadge value={meta["服务类型"] || meta.serviceType || ""} charterHours={meta["包车时长"]} /></TableCell>
                         <TableCell className="text-xs">{meta.passengerCount || "-"}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
@@ -555,7 +717,15 @@ export default function OrdersPage() {
                                 <MoreHorizontal className="h-4 w-4" />
                               </Button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
+                            <DropdownMenuContent align="end" className="max-w-[280px]">
+                              {meta.serviceStandard && (
+                                <>
+                                  <div className="px-2 py-1.5 text-xs text-muted-foreground break-words whitespace-normal leading-relaxed">
+                                    {meta.serviceStandard}
+                                  </div>
+                                  <DropdownMenuSeparator />
+                                </>
+                              )}
                               {order.status === 0 && (
                                 <DropdownMenuItem onClick={(e) => {
                                   e.stopPropagation()
@@ -563,6 +733,15 @@ export default function OrdersPage() {
                                 }}>
                                   <RefreshCw className="mr-2 h-4 w-4" />
                                   派单
+                                </DropdownMenuItem>
+                              )}
+                              {order.status === 1 && (
+                                <DropdownMenuItem onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleCancelDispatch(order.id)
+                                }}>
+                                  <Ban className="mr-2 h-4 w-4" />
+                                  撤销派单
                                 </DropdownMenuItem>
                               )}
                               {(order.status === 1 || order.status === 2) && (
@@ -573,6 +752,40 @@ export default function OrdersPage() {
                                   <RefreshCw className="mr-2 h-4 w-4" />
                                   改派
                                 </DropdownMenuItem>
+                              )}
+                              {(meta["服务类型"] === "包车" || meta.serviceType === "包车") && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetCharterHours(order.id, 4, order.metadata || "") }}
+                                    className={!meta["包车时长"] ? "text-orange-400" : ""}
+                                  >
+                                    {!meta["包车时长"] && "⚠ "}包车：4 小时{meta["包车时长"] === "4" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetCharterHours(order.id, 8, order.metadata || "") }}
+                                    className={!meta["包车时长"] ? "text-orange-400" : ""}
+                                  >
+                                    {!meta["包车时长"] && "⚠ "}包车：8 小时{meta["包车时长"] === "8" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                              {order.reqVehicleType === "商务型" && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "豪华商务型", order.metadata || "") }}
+                                    className={!meta["商务类型"] ? "text-yellow-400" : ""}
+                                  >
+                                    {!meta["商务类型"] && "⚠ "}豪华商务型{meta["商务类型"] === "豪华商务型" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "普通商务型", order.metadata || "") }}
+                                    className={!meta["商务类型"] ? "text-yellow-400" : ""}
+                                  >
+                                    {!meta["商务类型"] && "⚠ "}普通商务型{meta["商务类型"] === "普通商务型" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                </>
                               )}
                               <DropdownMenuSeparator />
                               {order.status !== 3 && order.status !== 4 && (
@@ -592,7 +805,7 @@ export default function OrdersPage() {
                       </TableRow>
                       {isExpanded && (
                         <TableRow className="bg-muted/20 hover:bg-muted/20">
-                          <TableCell colSpan={11} className="px-6 pb-4 pt-0 max-w-0">
+                          <TableCell colSpan={10} className="px-6 pb-4 pt-0 max-w-0">
                             {hasExtra ? (
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-4 pt-3 border-t border-border/30 overflow-hidden">
                                 {METADATA_GROUPS.map(group => {
@@ -670,6 +883,22 @@ export default function OrdersPage() {
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction onClick={handleBatchDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={cancelAllOpen} onOpenChange={setCancelAllOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>取消全部派单</AlertDialogTitle>
+            <AlertDialogDescription>
+              将把所有"已分配"状态的订单重置为"待排单"，司机信息会被清空。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>返回</AlertDialogCancel>
+            <AlertDialogAction onClick={handleCancelAllDispatches} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              确认取消全部
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,5 +1,12 @@
 import type { Order, Driver, VehicleType } from "./types"
 
+/**
+ * Cache of pre-fetched Amap driving times.
+ * Key: "originLng,originLat->destLng,destLat"
+ * Value: driving time in minutes
+ */
+export type TravelTimeCache = Map<string, number>
+
 export interface DispatchScore {
   driverId: string
   driverName: string
@@ -46,7 +53,7 @@ function getServiceType(order: Order): string | null {
   if (!order.metadata) return null
   try {
     const meta = typeof order.metadata === "string" ? JSON.parse(order.metadata) : order.metadata
-    return meta["服务类型"] ?? null
+    return meta["服务类型"] ?? meta["serviceType"] ?? null
   } catch {
     return null
   }
@@ -75,63 +82,134 @@ export function isWithinWorkingHours(workingHours: string, time: string): boolea
   }
 }
 
-// 车型兼容矩阵：key=司机车型，value=可接受的订单车型（按优先级排列）
-const VEHICLE_COMPAT: Record<VehicleType, VehicleType[]> = {
-  商务型: ["商务型", "豪华型", "舒适型", "经济型"],
-  豪华型: ["豪华型", "舒适型", "经济型"],
-  舒适型: ["舒适型", "经济型"],
-  经济型: ["经济型"],
+/**
+ * 车型兼容矩阵（从高到低：豪华商务型 > 普通商务型 > 豪华型 > 舒适型 > 经济型）
+ * key=司机车型，value=可接受的订单车型列表（index越大降级越多，惩罚越高）
+ *
+ * 注意：
+ * - 商务型（两档）不接经济型订单
+ * - 豪华型不接经济型订单（接舒适型属于降级接单）
+ * - 导入订单中的旧"商务型"需用户手动细分后才能参与派单
+ */
+const VEHICLE_COMPAT: Record<string, string[]> = {
+  豪华商务型: ["豪华商务型", "普通商务型", "豪华型", "舒适型"],
+  普通商务型: ["普通商务型", "豪华型", "舒适型"],
+  豪华型:     ["豪华型", "舒适型"],
+  舒适型:     ["舒适型", "经济型"],
+  经济型:     ["经济型"],
 }
 
-/** 判断司机车型是否可接此订单 */
-function canDriverServeOrder(driverType: VehicleType, orderType: VehicleType): boolean {
+/** 判断司机车型是否可接此订单车型 */
+function canDriverServeOrder(driverType: string, orderType: string): boolean {
   return VEHICLE_COMPAT[driverType]?.includes(orderType) ?? false
 }
 
 /**
- * 车型降级惩罚分数（0=完全匹配, 10=降1级, 20=降2级, 30=降3级）
- * 降级越多扣分越多
+ * 车型降级惩罚（0=完全匹配, 10=降1级, 20=降2级, 30=降3级）
+ * 降级越多扣分越多，不兼容返回 999（硬过滤）
  */
-function getVehicleDowngradePenalty(driverType: VehicleType, orderType: VehicleType): number {
+function getVehicleDowngradePenalty(driverType: string, orderType: string): number {
   const compatible = VEHICLE_COMPAT[driverType]
-  if (!compatible) return 30
+  if (!compatible) return 999
   const idx = compatible.indexOf(orderType)
+  if (idx < 0)  return 999  // 不兼容
   if (idx === 0) return 0   // 完全匹配
-  if (idx === 1) return 10  // 降一级（如商务做豪华）
-  if (idx === 2) return 20  // 降两级
-  return 30                 // 降三级（豪华/商务做经济，最坏情况）
+  if (idx === 1) return 10
+  if (idx === 2) return 20
+  return 30
 }
 
 /**
- * 根据上一单服务类型和新单服务类型，返回要求的最小时间间隔（分钟）
- *
- * 规则：
- * - 送机/站 → 送机/站：120 min
- * - 送机/站 → 接机/站：60 min
- * - 接机/站 → 任意：180 min
- * - 包车 → 任意：120 min（默认）
+ * 获取订单的有效车型。
+ * 旧版导入的 "商务型" 需要用户细分后存入 metadata["商务类型"]；
+ * 未细分的订单返回 "商务型"（调用方需拒绝派单）。
  */
-function getRequiredGap(prevType: string | null, newType: string | null): number {
-  if (!prevType) return 120
-  if (prevType.startsWith("接机")) return 180
+export function getEffectiveOrderVehicleType(order: Order): string {
+  if (order.reqVehicleType !== "商务型") return order.reqVehicleType
+  try {
+    const meta = typeof order.metadata === "string" ? JSON.parse(order.metadata ?? "{}") : (order.metadata ?? {})
+    return (meta["商务类型"] as string) || "商务型"
+  } catch {
+    return "商务型"
+  }
+}
+
+/** 从 metadata 读取包车时长（小时），只有 4 和 8 两档，默认 4 */
+function getCharterHours(order: Order): number {
+  if (!order.metadata) return 4
+  try {
+    const meta = typeof order.metadata === "string" ? JSON.parse(order.metadata) : order.metadata
+    const val = parseInt(String(meta["包车时长"] ?? "4"), 10)
+    return val === 8 ? 8 : 4
+  } catch {
+    return 4
+  }
+}
+
+/**
+ * 返回服务类型的"非行驶"缓冲时间（分钟）。
+ *
+ * 业务最小间隔（pickup→pickup 时间差下限），动态行驶时间叠加在此之上：
+ * - 接机/站 → 任意：90 min（等落地 + 提行李 + 离场缓冲，行驶时间动态加）
+ * - 送机/站 → 接机/站：60 min
+ * - 送机/站 → 送机/站：120 min
+ * - 包车 → 任意：包车时长 × 60 min
+ * - 市内约车 → 任意：60 min
+ *
+ * 实际所需间隔 = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
+ */
+function getServiceBuffer(prevType: string | null, newType: string | null, charterHours = 4): number {
+  if (!prevType) return 60
+  if (prevType.startsWith("接机")) return 90
   if (prevType.startsWith("送机")) {
     if (newType?.startsWith("接机")) return 60
     return 120
   }
-  if (prevType === "包车") return 120
-  if (prevType.startsWith("市内约车")) return 120
-  return 120
+  if (prevType === "包车") return charterHours * 60
+  if (prevType.startsWith("市内约车")) return 60
+  return 60
 }
 
 /**
- * 估算从 dropoff 到下一单 pickup 的行驶时间（分钟）
- * 上海城区平均速度 35 km/h；坐标任一为 0 则返回 0（无位置数据）
+ * 上海时段交通系数
+ * 07:00–09:30 早高峰 +40%
+ * 11:30–13:30 午高峰 +10%
+ * 17:00–20:00 晚高峰 +55%
+ * 22:00–06:00 夜间   -20%
+ */
+function getTrafficMultiplier(timeStr: string): number {
+  if (!timeStr) return 1.0
+  const [h, m] = timeStr.split(":").map(Number)
+  const mins = h * 60 + m
+  if (mins >= 420  && mins <= 570)  return 1.4
+  if (mins >= 690  && mins <= 810)  return 1.1
+  if (mins >= 1020 && mins <= 1200) return 1.55
+  if (mins >= 1320 || mins <= 360)  return 0.8
+  return 1.0
+}
+
+/**
+ * 获取从 from → to 的行驶时间（分钟）
+ * 优先从 cache（Amap API 预取结果）读取；
+ * cache 未命中则用 haversine + 时段交通系数估算。
  */
 function estimateTravelMinutes(
   fromLat: number, fromLng: number,
   toLat: number, toLng: number,
+  pickupTime?: string,
+  cache?: TravelTimeCache,
 ): number {
   if (!fromLat || !fromLng || !toLat || !toLng) return 0
+
+  // Try cache first (populated by Amap route API before dispatch)
+  if (cache) {
+    const key = `${fromLng},${fromLat}->${toLng},${toLat}`
+    if (cache.has(key)) return cache.get(key)!
+  }
+
+  // Fallback: haversine at 35 km/h — NO traffic multiplier here.
+  // 35 km/h is already a conservative urban estimate; the multiplier only applies
+  // on top of Amap's base duration (handled in /api/maps/drivetime).
   const dist = haversineDistance(fromLat, fromLng, toLat, toLng)
   return Math.ceil(dist / 35 * 60)
 }
@@ -140,6 +218,7 @@ function estimateTravelMinutes(
 function hasTimeConflict(
   existingOrder: Order,
   newOrder: Order,
+  cache?: TravelTimeCache,
 ): { conflict: boolean; gap: number; required: number; travelMinutes: number } {
   if (existingOrder.flightDate !== newOrder.flightDate) {
     return { conflict: false, gap: Infinity, required: 0, travelMinutes: 0 }
@@ -161,16 +240,19 @@ function hasTimeConflict(
 
   const prevType = getServiceType(prevOrder)
   const nextType = getServiceType(nextOrder)
-  const serviceGap = getRequiredGap(prevType, nextType)
+  const charterHours = prevType === "包车" ? getCharterHours(prevOrder) : 4
 
-  // 行驶时间：从前单的下车点到后单的上车点
+  // 行驶时间：从前单下车点到后单上车点（Amap 缓存 > haversine 估算）
   const travelMinutes = estimateTravelMinutes(
     prevOrder.dropoffLat, prevOrder.dropoffLng,
     nextOrder.pickupLat, nextOrder.pickupLng,
+    nextOrder.pickupTime,
+    cache,
   )
 
-  // 总需求 = 服务类型间隔（含服务时长估算）+ 行驶时间
-  const required = serviceGap + travelMinutes
+  // 所需间隔 = 业务缓冲 + 实际行驶时间（前单下车点 → 后单上车点）
+  const serviceBuffer = getServiceBuffer(prevType, nextType, charterHours)
+  const required = serviceBuffer + travelMinutes
 
   return { conflict: gapMinutes < required, gap: gapMinutes, required, travelMinutes }
 }
@@ -232,16 +314,28 @@ export function runDispatchAlgorithm(
   order: Order,
   availableDrivers: Driver[],
   allOrders: Order[],
+  travelCache?: TravelTimeCache,
 ): DispatchResult {
   const recommendations: DispatchScore[] = []
   const targetDate = order.flightDate
   const targetTime = order.pickupTime
 
+  // 解析有效订单车型（商务型需用户手动细分）
+  const effectiveOrderType = getEffectiveOrderVehicleType(order)
+  if (effectiveOrderType === "商务型") {
+    return {
+      success: false,
+      orderId: order.id,
+      recommendations: [],
+      message: "商务型订单未选择豪华商务/普通商务，请先完成选择",
+    }
+  }
+
   // 过滤：车型兼容 + 状态在岗
   const compatibleDrivers = availableDrivers.filter(
     (d) =>
       (d.status === "available" || d.status === "busy") &&
-      canDriverServeOrder(d.vehicleType, order.reqVehicleType),
+      canDriverServeOrder(d.vehicleType, effectiveOrderType),
   )
 
   if (compatibleDrivers.length === 0) {
@@ -249,7 +343,7 @@ export function runDispatchAlgorithm(
       success: false,
       orderId: order.id,
       recommendations: [],
-      message: `没有兼容车型（${order.reqVehicleType}）的可用司机`,
+      message: `没有兼容车型（${effectiveOrderType}）的可用司机`,
     }
   }
 
@@ -270,16 +364,15 @@ export function runDispatchAlgorithm(
     }
 
     // 2. 车型降级惩罚
-    const downgrade = getVehicleDowngradePenalty(driver.vehicleType, order.reqVehicleType)
+    const downgrade = getVehicleDowngradePenalty(driver.vehicleType, effectiveOrderType)
     if (downgrade === 0) {
       reasons.push("车型完全匹配")
     } else {
-      reasons.push(`车型降级接单（${driver.vehicleType}→${order.reqVehicleType}）`)
+      reasons.push(`车型降级接单（${driver.vehicleType}→${effectiveOrderType}）`)
     }
 
-    // 3. 工作量评分（当日已接单数，越少越好）
+    // 3. 工作量（仅用于展示，不参与评分）
     const workload = calculateWorkload(driver, allOrders, targetDate)
-    const workloadScore = Math.max(0, 100 - workload * 12)
     reasons.push(workload === 0 ? "当日无订单" : `当日已接 ${workload} 单`)
 
     // 4. 时间冲突检查
@@ -291,7 +384,7 @@ export function runDispatchAlgorithm(
     for (const existing of driverOrders) {
       // 任意一方没有 pickupTime，无法判断冲突，跳过
       if (!existing.pickupTime || !order.pickupTime) continue
-      const { conflict, gap, required, travelMinutes } = hasTimeConflict(existing, order)
+      const { conflict, gap, required, travelMinutes } = hasTimeConflict(existing, order, travelCache)
       if (conflict) {
         hasConflict = true
         timeConflictPenalty = 50
@@ -307,7 +400,12 @@ export function runDispatchAlgorithm(
 
     // 5. 距离评分（司机有效起点 → 订单取货点）
     const pos = getDriverEffectivePosition(driver, allOrders, targetDate, targetTime)
-    const distance = haversineDistance(pos.lat, pos.lng, order.pickupLat, order.pickupLng)
+    // 如果 cache 有从司机位置到取货点的行驶时间，用行驶时间推算等效距离；否则直接用 haversine
+    const cacheKey = `${pos.lng},${pos.lat}->${order.pickupLng},${order.pickupLat}`
+    const cachedMinutes = travelCache?.get(cacheKey)
+    const distance = cachedMinutes != null
+      ? cachedMinutes / 60 * 35   // 反推等效距离（km），便于统一评分量纲
+      : haversineDistance(pos.lat, pos.lng, order.pickupLat, order.pickupLng)
     // 50km 内满分线性递减；50km+ 接近 0 分
     const distanceScore = Math.max(0, 100 - distance * 2)
     const posLabel =
@@ -317,14 +415,13 @@ export function runDispatchAlgorithm(
     reasons.push(posLabel)
 
     // ── 综合评分 ──
-    // 工作量 30% + 距离 35% - 车型降级 - 时间冲突 20% + 车型完全匹配加分 15%
+    // 距离 50% - 车型降级 - 时间冲突 25% + 车型完全匹配加分 25%
     const vehicleMatchBonus = downgrade === 0 ? 100 : 0
     const totalScore = Math.round(
-      workloadScore * 0.3 +
-        distanceScore * 0.35 -
+      distanceScore * 0.5 -
         downgrade -
-        timeConflictPenalty * 0.2 +
-        vehicleMatchBonus * 0.15,
+        timeConflictPenalty * 0.25 +
+        vehicleMatchBonus * 0.25,
     )
 
     recommendations.push({
@@ -334,7 +431,7 @@ export function runDispatchAlgorithm(
       breakdown: {
         vehicleMatch: vehicleMatchBonus,
         vehicleDowngrade: downgrade,
-        workloadScore,
+        workloadScore: 0,
         distanceScore,
         timeConflictPenalty,
       },
@@ -369,6 +466,7 @@ export function batchDispatch(
   orders: Order[],
   drivers: Driver[],
   allOrders: Order[],
+  travelCache?: TravelTimeCache,
 ): Map<string, DispatchResult> {
   const results = new Map<string, DispatchResult>()
   // 本地副本：随批次推进，将已分配订单加入，让后续冲突检测能感知同批次的安排
@@ -385,7 +483,7 @@ export function batchDispatch(
 
   for (const order of sortedOrders) {
     // 所有司机始终作为候选，时间冲突由算法内部检测和降分
-    const result = runDispatchAlgorithm(order, drivers, localOrders)
+    const result = runDispatchAlgorithm(order, drivers, localOrders, travelCache)
     results.set(order.id, result)
 
     if (result.bestMatch) {
