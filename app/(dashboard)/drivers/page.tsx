@@ -101,7 +101,7 @@ export default function DriversPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
   const [batchMode, setBatchMode] = useState(false)
-  const [sortField, setSortField] = useState<SortField | null>(null)
+  const [sortField, setSortField] = useState<SortField | null>('vehicleType')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
   const handleSort = (field: SortField) => {
@@ -157,7 +157,11 @@ export default function DriversPage() {
         let cmp = 0
         if (sortField === 'name')         cmp = a.name.localeCompare(b.name, 'zh-CN')
         if (sortField === 'vehiclePlate') cmp = a.vehiclePlate.localeCompare(b.vehiclePlate)
-        if (sortField === 'vehicleType')  cmp = (VEHICLE_TYPE_ORDER[a.vehicleType] ?? 9) - (VEHICLE_TYPE_ORDER[b.vehicleType] ?? 9)
+        if (sortField === 'vehicleType') {
+          const aType = a.vehicleType === "商务型" ? "普通商务型" : a.vehicleType
+          const bType = b.vehicleType === "商务型" ? "普通商务型" : b.vehicleType
+          cmp = (VEHICLE_TYPE_ORDER[aType] ?? 9) - (VEHICLE_TYPE_ORDER[bType] ?? 9)
+        }
         if (sortField === 'workingHours') cmp = (a.workingHours ?? '').localeCompare(b.workingHours ?? '')
         if (sortField === 'status')       cmp = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9)
         return sortDir === 'asc' ? cmp : -cmp
@@ -440,13 +444,13 @@ export default function DriversPage() {
                     </td>
                     <td className="py-3 px-4">
                       <Select
-                        value={driver.vehicleType}
+                        value={driver.vehicleType === "商务型" ? "普通商务型" : driver.vehicleType}
                         onValueChange={(value) => handleVehicleTypeChange(driver.id, value as VehicleType)}
                       >
                         <SelectTrigger className="h-7 text-xs w-[120px] border border-muted-foreground/30">
                           <div className="flex items-center gap-1.5 overflow-hidden">
-                            <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[driver.vehicleType as keyof typeof VEHICLE_TYPE_COLORS] ?? 'bg-muted'}`} />
-                            <span className="truncate">{driver.vehicleType}</span>
+                            <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[(driver.vehicleType === "商务型" ? "普通商务型" : driver.vehicleType) as keyof typeof VEHICLE_TYPE_COLORS] ?? 'bg-muted'}`} />
+                            <span className="truncate">{driver.vehicleType === "商务型" ? "普通商务型" : driver.vehicleType}</span>
                           </div>
                         </SelectTrigger>
                         <SelectContent>
@@ -591,7 +595,7 @@ export default function DriversPage() {
                   <p className="font-medium mb-1 text-xs">必填列：</p>
                   <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
                     <span>• 司机</span><span>• 司机电话</span>
-                    <span>• 车型（舒适/豪华/商务/经济型）</span><span>• 车号</span>
+                    <span>• 车型（豪华商务/普通商务/豪华/舒适/经济型，商务型自动转普通商务型）</span><span>• 车号</span>
                     <span>• 时间（如 05:00-18:00）</span>
                   </div>
                   <p className="font-medium mt-2 mb-1 text-xs">可选列：</p>

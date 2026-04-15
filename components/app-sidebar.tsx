@@ -14,6 +14,7 @@ import {
   Car,
   ChevronLeft,
   ChevronRight,
+  History,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DateTimeClock } from '@/components/date-time-clock'
@@ -24,6 +25,7 @@ const navItems = [
   { href: '/orders', label: '订单管理', icon: ClipboardList },
   { href: '/drivers', label: '司机管理', icon: Users },
   { href: '/dispatch', label: '排单控制台', icon: Send },
+  { href: '/dispatch-history', label: '派单历史', icon: History },
   { href: '/settings', label: '系统设置', icon: Settings, adminOnly: true },
 ]
 

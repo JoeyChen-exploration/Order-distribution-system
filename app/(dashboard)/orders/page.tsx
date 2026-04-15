@@ -23,7 +23,6 @@ import {
   Download,
   Ban,
   Loader2,
-  HelpCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -222,6 +221,11 @@ export default function OrdersPage() {
     setOrders(await getOrders())
   }
 
+  const handleVehicleTypeChange = async (orderId: string, newType: string) => {
+    await updateOrder(orderId, { reqVehicleType: newType })
+    setOrders(await getOrders())
+  }
+
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev)
@@ -274,12 +278,6 @@ export default function OrdersPage() {
     setOrders(await getOrders())
   }
 
-  const handleSetBusinessType = async (orderId: string, type: "豪华商务型" | "普通商务型", currentMeta: string) => {
-    const meta = currentMeta ? JSON.parse(currentMeta) : {}
-    meta["商务类型"] = type
-    await updateOrder(orderId, { metadata: JSON.stringify(meta) })
-    setOrders(await getOrders())
-  }
 
   const refreshFlightStatuses = async () => {
     setLoadingFlights(true)
@@ -480,28 +478,18 @@ export default function OrdersPage() {
         )
       })()}
 
-      {/* Business type warning */}
+      {/* Upgrade reminder: orders auto-converted from 商务型 → 普通商务型 */}
       {(() => {
-        const pending = orders.filter(o => {
-          if (o.reqVehicleType !== "商务型") return false
-          const m = o.metadata ? JSON.parse(o.metadata) : {}
-          return !m["商务类型"]
+        const upgradeable = orders.filter(o => {
+          if (o.reqVehicleType !== "普通商务型") return false
+          try { const m = JSON.parse(o.metadata || "{}"); return m["原车型"] === "商务型" } catch { return false }
         })
-        if (pending.length === 0) return null
+        if (upgradeable.length === 0) return null
         return (
-          <div className="flex flex-wrap items-start gap-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3">
-            <span className="text-yellow-400 text-sm font-medium shrink-0">⚠ 以下商务型订单未选择豪华商务/普通商务，无法参与派单：</span>
-            <div className="flex flex-wrap gap-2">
-              {pending.map(o => (
-                <button
-                  key={o.id}
-                  onClick={() => { setSearchQuery(o.orderNo); setCurrentPage(1) }}
-                  className="text-xs px-2 py-0.5 rounded border border-yellow-500/50 text-yellow-300 hover:bg-yellow-500/20 transition-colors font-mono"
-                >
-                  {o.orderNo}
-                </button>
-              ))}
-            </div>
+          <div className="rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-3">
+            <span className="text-blue-400 text-sm font-medium">
+              ℹ {upgradeable.length} 条订单已从商务型自动归入普通商务型，如需升级为豪华商务型请在订单中操作
+            </span>
           </div>
         )
       })()}
@@ -581,25 +569,26 @@ export default function OrdersPage() {
       {/* Orders Table */}
       <Card>
         <CardContent className="p-0">
-          <Table className="table-fixed w-full">
+          <div className="overflow-x-auto">
+          <Table className="w-full min-w-[1200px]">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[40px]">
+                <TableHead className="w-10 shrink-0">
                   <Checkbox
                     checked={filteredOrders.length > 0 && selectedIds.size === filteredOrders.length}
                     onCheckedChange={toggleSelectAll}
                     className={cn("border-muted-foreground/60", !batchMode && "invisible")}
                   />
                 </TableHead>
-                <TableHead className="w-[150px]">订单号</TableHead>
-                <TableHead className="w-[140px]">航班/时间</TableHead>
-                <TableHead>地点</TableHead>
-                <TableHead className="w-[80px]">车型</TableHead>
-                <TableHead className="w-[110px]">服务类型</TableHead>
-                <TableHead className="w-[50px]">人数</TableHead>
-                <TableHead className="w-[90px]">司机</TableHead>
-                <TableHead className="w-[80px]">状态</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
+                <TableHead className="min-w-[140px]">订单号</TableHead>
+                <TableHead className="min-w-[130px]">航班/时间</TableHead>
+                <TableHead className="min-w-[240px]">地点</TableHead>
+                <TableHead className="min-w-[120px]">车型</TableHead>
+                <TableHead className="min-w-[100px]">服务类型</TableHead>
+                <TableHead className="min-w-[48px]">人数</TableHead>
+                <TableHead className="min-w-[80px]">司机</TableHead>
+                <TableHead className="min-w-[72px]">状态</TableHead>
+                <TableHead className="min-w-[48px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -659,43 +648,33 @@ export default function OrdersPage() {
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          {order.reqVehicleType === "商务型" ? (
-                            meta["商务类型"] ? (
-                              <div className="flex items-center gap-1.5">
-                                <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[meta["商务类型"] as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
-                                <span className="text-sm">{meta["商务类型"]}</span>
-                              </div>
-                            ) : (
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <button
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="flex items-center gap-1 text-yellow-400 hover:text-yellow-300 transition-colors group"
-                                  >
-                                    <HelpCircle className="w-3.5 h-3.5 shrink-0" />
-                                    <span className="text-sm">商务型</span>
-                                    <ChevronDown className="w-3 h-3 opacity-60 group-hover:opacity-100" />
-                                  </button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="start">
-                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "豪华商务型", order.metadata ?? "") }}>
-                                    <span className="inline-block w-2 h-2 rounded-sm shrink-0 bg-purple-500 mr-2" />
-                                    豪华商务型
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "普通商务型", order.metadata ?? "") }}>
-                                    <span className="inline-block w-2 h-2 rounded-sm shrink-0 bg-fuchsia-500 mr-2" />
-                                    普通商务型
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          {(() => {
+                            const displayType = order.reqVehicleType === "商务型" ? "普通商务型" : order.reqVehicleType
+                            return (
+                              <Select
+                                value={displayType}
+                                onValueChange={(v) => handleVehicleTypeChange(order.id, v)}
+                              >
+                                <SelectTrigger className="h-7 text-xs w-[108px] border border-muted-foreground/30">
+                                  <div className="flex items-center gap-1.5 overflow-hidden">
+                                    <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[displayType as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
+                                    <span className="truncate">{displayType}</span>
+                                  </div>
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {VEHICLE_TYPE_OPTIONS.map(t => (
+                                    <SelectItem key={t} value={t} className="text-xs">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[t]}`} />
+                                        {t}
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             )
-                          ) : (
-                            <div className="flex items-center gap-1.5">
-                              <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[order.reqVehicleType as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
-                              {order.reqVehicleType}
-                            </div>
-                          )}
+                          })()}
                         </TableCell>
                         <TableCell><ServiceTypeBadge value={meta["服务类型"] || meta.serviceType || ""} charterHours={meta["包车时长"]} /></TableCell>
                         <TableCell className="text-xs">{meta.passengerCount || "-"}</TableCell>
@@ -840,6 +819,7 @@ export default function OrdersPage() {
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 

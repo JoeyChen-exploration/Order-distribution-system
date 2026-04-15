@@ -100,11 +100,12 @@ const fieldMapping: Record<string, string> = {
 }
 
 const vehicleTypeMapping: Record<string, string> = {
-  // 标准名称直接保留
   "舒适型": "舒适型",
   "豪华型": "豪华型",
-  "商务型": "商务型",
   "经济型": "经济型",
+  "豪华商务型": "豪华商务型",
+  "普通商务型": "普通商务型",
+  "商务型": "普通商务型",
 }
 
 export default function OrderImportPage() {
@@ -127,8 +128,8 @@ export default function OrderImportPage() {
     if (data.flightDate && !/^\d{4}-\d{2}-\d{2}/.test(String(data.flightDate))) {
       errors.push("服务日期格式不正确，应为 YYYY-MM-DD")
     }
-    if (data.reqVehicleType && !["舒适型", "豪华型", "商务型", "经济型"].includes(String(data.reqVehicleType))) {
-      errors.push(`车型无效："${data.reqVehicleType}"，应为 舒适型/豪华型/商务型/经济型`)
+    if (data.reqVehicleType && !["舒适型", "豪华型", "豪华商务型", "普通商务型", "经济型"].includes(String(data.reqVehicleType))) {
+      errors.push(`车型无效："${data.reqVehicleType}"，应为 舒适型/豪华型/豪华商务型/普通商务型/经济型`)
     }
 
     return { rowIndex, data, errors, isValid: errors.length === 0 }
@@ -169,7 +170,10 @@ export default function OrderImportPage() {
           } else {
             value = String(raw ?? "").trim()
           }
-          if (header === "reqVehicleType") value = vehicleTypeMapping[value] || value
+          if (header === "reqVehicleType") {
+            if (value === "商务型") data["原车型"] = "商务型"
+            value = vehicleTypeMapping[value] || value
+          }
           if (value) data[header] = value
         })
 

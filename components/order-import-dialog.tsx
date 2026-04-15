@@ -39,7 +39,9 @@ const FIELD_MAP: Record<string, string> = {
 }
 
 const VEHICLE_MAP: Record<string, string> = {
-  "舒适型": "舒适型", "豪华型": "豪华型", "商务型": "商务型", "经济型": "经济型",
+  "舒适型": "舒适型", "豪华型": "豪华型", "经济型": "经济型",
+  "豪华商务型": "豪华商务型", "普通商务型": "普通商务型",
+  "商务型": "普通商务型",
 }
 
 const SERVICE_TYPE_MAP: Record<string, string> = {
@@ -147,7 +149,7 @@ function validateRow(data: Record<string, string | number | boolean>, rowIndex: 
   if (!data.reqVehicleType) errors.push("缺少预订车型")
   if (data.flightDate && !/^\d{4}-\d{2}-\d{2}/.test(String(data.flightDate)))
     errors.push("服务日期格式不正确")
-  if (data.reqVehicleType && !["舒适型", "豪华型", "商务型", "经济型"].includes(String(data.reqVehicleType)))
+  if (data.reqVehicleType && !["舒适型", "豪华型", "豪华商务型", "普通商务型", "经济型"].includes(String(data.reqVehicleType)))
     errors.push(`车型无效："${data.reqVehicleType}"`)
   return { rowIndex, data, errors, isValid: errors.length === 0 }
 }
@@ -216,7 +218,10 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
           } else {
             value = String(raw ?? "").trim()
           }
-          if (header === "reqVehicleType") value = VEHICLE_MAP[value] || value
+          if (header === "reqVehicleType") {
+            if (value === "商务型") data["原车型"] = "商务型"
+            value = VEHICLE_MAP[value] || value
+          }
           if (header === "服务类型") value = SERVICE_TYPE_MAP[value] || value
           if (value) data[header] = value
         })

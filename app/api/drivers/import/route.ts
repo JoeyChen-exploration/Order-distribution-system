@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import * as XLSX from "xlsx"
 
-const VALID_VEHICLE_TYPES = ["舒适型", "豪华型", "商务型", "经济型"]
+const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
 const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
 
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
@@ -77,7 +77,8 @@ export async function POST(req: NextRequest) {
     const r = raw[i]
     const rowNum = i + 1
 
-    const vehicleType  = idxVehicleType  >= 0 ? str(r[idxVehicleType])  : ""
+    const rawVehicleType = idxVehicleType >= 0 ? str(r[idxVehicleType]) : ""
+    const vehicleType = rawVehicleType === "商务型" ? "普通商务型" : rawVehicleType
     const vehiclePlate = idxPlate        >= 0 ? str(r[idxPlate])        : ""
     const name         = idxName         >= 0 ? str(r[idxName])         : ""
     const rawPhone     = idxPhone        >= 0 ? str(r[idxPhone])        : ""
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest) {
     if (!phone)        errors.push({ row: rowNum, field: "司机电话", message: "不能为空" })
     if (!vehiclePlate) errors.push({ row: rowNum, field: "车号",    message: "不能为空" })
     if (!VALID_VEHICLE_TYPES.includes(vehicleType)) {
-      errors.push({ row: rowNum, field: "车型", message: `无效车型"${vehicleType}"，应为 舒适型/豪华型/商务型/经济型` })
+      errors.push({ row: rowNum, field: "车型", message: `无效车型"${vehicleType}"，应为 豪华商务型/普通商务型/豪华型/舒适型/商务型/经济型` })
     }
     if (!workingHours) {
       errors.push({ row: rowNum, field: "时间", message: "工作时间不能为空，格式：HH:MM-HH:MM（如 06:00-22:00）" })

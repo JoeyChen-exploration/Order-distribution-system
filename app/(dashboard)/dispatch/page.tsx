@@ -16,6 +16,7 @@ import {
   CalendarIcon,
   UserCheck,
   X,
+  RefreshCw,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -56,6 +57,22 @@ const serviceTypeConfig: Record<string, { border: string; text: string; bg: stri
   "送机/站": { border: "border-amber-500",   text: "text-amber-400",   bg: "bg-amber-500/10" },
   "包车":    { border: "border-emerald-500", text: "text-emerald-400", bg: "bg-emerald-500/10" },
   "市内约车": { border: "border-violet-500",  text: "text-violet-400",  bg: "bg-violet-500/10" },
+}
+
+function extractCity(address: string): string {
+  const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
+  return m ? m[0].replace(/省|区|县/, "市") : "上海"
+}
+
+async function geocodeAddr(address: string): Promise<{ lat: number; lng: number } | null> {
+  if (!address) return null
+  try {
+    const city = extractCity(address)
+    const res = await fetch(`/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`)
+    const data = await res.json()
+    if (data.lat && data.lng) return { lat: data.lat, lng: data.lng }
+  } catch {}
+  return null
 }
 
 function ServiceTypeBadge({ value, charterHours }: { value: string; charterHours?: string }) {
@@ -149,6 +166,89 @@ export default function DispatchPage() {
   }, [pendingOrders, drivers, selectedOrders])
 
   const [coordWarningExpanded, setCoordWarningExpanded] = useState(false)
+  const [regeocoding, setRegeocoding] = useState<Set<string>>(new Set())
+
+  // Manual address edit dialog
+  const [editCoordOrder, setEditCoordOrder] = useState<Order | null>(null)
+  const [editPickupAddr, setEditPickupAddr] = useState("")
+  const [editDropoffAddr, setEditDropoffAddr] = useState("")
+  const [editPickupFailed, setEditPickupFailed] = useState(false)
+  const [editDropoffFailed, setEditDropoffFailed] = useState(false)
+  const [editGeocoding, setEditGeocoding] = useState(false)
+
+  const openEditCoordDialog = (order: Order, pickupFailed: boolean, dropoffFailed: boolean) => {
+    setEditCoordOrder(order)
+    setEditPickupAddr(order.pickupAddress)
+    setEditDropoffAddr(order.dropoffAddress)
+    setEditPickupFailed(pickupFailed)
+    setEditDropoffFailed(dropoffFailed)
+  }
+
+  const handleEditGeocode = async () => {
+    if (!editCoordOrder) return
+    setEditGeocoding(true)
+    try {
+      const [pickup, dropoff] = await Promise.all([
+        editPickupFailed  ? geocodeAddr(editPickupAddr)  : Promise.resolve(null),
+        editDropoffFailed ? geocodeAddr(editDropoffAddr) : Promise.resolve(null),
+      ])
+      const updates: Record<string, unknown> = {}
+      if (editPickupFailed && pickup)   { updates.pickupLat  = pickup.lat;  updates.pickupLng  = pickup.lng  }
+      if (editDropoffFailed && dropoff) { updates.dropoffLat = dropoff.lat; updates.dropoffLng = dropoff.lng }
+      // also persist edited address text
+      if (editPickupFailed)  updates.pickupAddress  = editPickupAddr
+      if (editDropoffFailed) updates.dropoffAddress = editDropoffAddr
+
+      if ((editPickupFailed && pickup) || (editDropoffFailed && dropoff)) {
+        await updateOrder(editCoordOrder.id, updates as Partial<Order>)
+        const fresh = await getOrders()
+        setAllOrders(fresh)
+        setPendingOrders(fresh.filter(o => o.status === 0))
+        // check if remaining addresses still fail
+        const stillPickupFailed  = editPickupFailed  && !pickup
+        const stillDropoffFailed = editDropoffFailed && !dropoff
+        if (stillPickupFailed || stillDropoffFailed) {
+          setEditPickupFailed(stillPickupFailed)
+          setEditDropoffFailed(stillDropoffFailed)
+        } else {
+          setEditCoordOrder(null)
+        }
+      } else {
+        // nothing resolved — keep dialog open, let user fix further
+        setEditPickupFailed(editPickupFailed && !pickup)
+        setEditDropoffFailed(editDropoffFailed && !dropoff)
+      }
+    } finally {
+      setEditGeocoding(false)
+    }
+  }
+
+  const handleRegeocode = async (order: Order) => {
+    setRegeocoding(prev => new Set([...prev, order.id]))
+    try {
+      const [pickup, dropoff] = await Promise.all([
+        geocodeAddr(order.pickupAddress),
+        geocodeAddr(order.dropoffAddress),
+      ])
+      const updates: Partial<Order> = {}
+      if (pickup)  { updates.pickupLat  = pickup.lat;  updates.pickupLng  = pickup.lng  }
+      if (dropoff) { updates.dropoffLat = dropoff.lat; updates.dropoffLng = dropoff.lng }
+      if (Object.keys(updates).length > 0) {
+        await updateOrder(order.id, updates)
+        const fresh = await getOrders()
+        setAllOrders(fresh)
+        setPendingOrders(fresh.filter(o => o.status === 0))
+      }
+      // open edit dialog for any address that still failed
+      const pickupFailed  = !pickup
+      const dropoffFailed = !dropoff
+      if (pickupFailed || dropoffFailed) {
+        openEditCoordDialog(order, pickupFailed, dropoffFailed)
+      }
+    } finally {
+      setRegeocoding(prev => { const s = new Set(prev); s.delete(order.id); return s })
+    }
+  }
 
   const coordWarning = useMemo(() => {
     const badOrders = pendingOrders.filter(o => !o.pickupLat || !o.pickupLng)
@@ -227,17 +327,12 @@ export default function DispatchPage() {
 
     const ordersToDispatch = filteredOrders.filter(o => selectedOrders.has(o.id))
 
-    // 检查是否有未完成必选项的订单
-    const unclassifiedBusiness = ordersToDispatch.filter(o => {
-      if (o.reqVehicleType !== "商务型") return false
-      try { const m = JSON.parse(o.metadata || "{}"); return !m["商务类型"] } catch { return true }
-    })
+    // 检查包车时长未确认的订单
     const unconfirmedCharter = ordersToDispatch.filter(o => {
       try { const m = JSON.parse(o.metadata || "{}"); return (m["服务类型"] === "包车" || m.serviceType === "包车") && !m["包车时长"] } catch { return false }
     })
-    if (unclassifiedBusiness.length > 0 || unconfirmedCharter.length > 0) {
-      const nos = [...unclassifiedBusiness.map(o => o.orderNo), ...unconfirmedCharter.map(o => o.orderNo)]
-      alert(`以下订单有待确认项，请先在订单管理中完成选择后再派单：\n${nos.join("\n")}`)
+    if (unconfirmedCharter.length > 0) {
+      alert(`以下包车订单未确认时长，请先在订单管理中完成选择后再派单：\n${unconfirmedCharter.map(o => o.orderNo).join("\n")}`)
       return
     }
 
@@ -348,6 +443,48 @@ export default function DispatchPage() {
 
   const handleConfirmAllBatch = async () => {
     if (!batchResults) return
+
+    // Build history record before clearing state
+    const historyItems = Array.from(batchResults.entries()).map(([orderId, result]) => {
+      const order = allOrders.find(o => o.id === orderId) || pendingOrders.find(o => o.id === orderId)
+      const driver = result.bestMatch ? drivers.find(d => d.id === result.bestMatch!.driverId) : null
+      let serviceType = ""
+      try {
+        const m = JSON.parse(order?.metadata || "{}")
+        serviceType = m.serviceType || m["服务类型"] || ""
+      } catch {}
+      return {
+        orderId,
+        orderNo: order?.orderNo || orderId,
+        flightNo: order?.flightNo || "",
+        flightDate: order?.flightDate || "",
+        pickupTime: order?.pickupTime || "",
+        pickupAddress: order?.pickupAddress || "",
+        dropoffAddress: order?.dropoffAddress || "",
+        reqVehicleType: order?.reqVehicleType || "",
+        serviceType,
+        matched: !!result.bestMatch,
+        driverId: result.bestMatch?.driverId,
+        driverName: result.bestMatch?.driverName,
+        driverPhone: driver?.phone,
+        vehiclePlate: driver?.vehiclePlate,
+        vehicleType: driver?.vehicleType,
+        score: result.bestMatch?.totalScore,
+        failReason: result.bestMatch ? undefined : result.message,
+      }
+    })
+    const matchedCount = historyItems.filter(i => i.matched).length
+    fetch("/api/dispatch-history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        totalOrders: historyItems.length,
+        matched: matchedCount,
+        unmatched: historyItems.length - matchedCount,
+        items: historyItems,
+      }),
+    }).catch(() => {})
+
     // 先清空面板和模式，再异步执行派单（避免确认后面板重新渲染空列表）
     const toDispatch = Array.from(batchResults.entries())
       .filter(([, result]) => result.bestMatch)
@@ -452,23 +589,45 @@ export default function DispatchPage() {
             <div className="px-4 pb-3 flex gap-8 text-xs text-warning/80 border-t border-warning/20 pt-3">
               {coordWarning.badOrders.length > 0 && (
                 <div>
-                  <p className="font-medium mb-1">缺坐标的订单（{coordWarning.badOrders.length} 条）</p>
-                  <ul className="space-y-0.5 max-h-32 overflow-auto">
-                    {coordWarning.badOrders.map(o => (
-                      <li key={o.id} className="font-mono">
-                        {o.orderNo} <span className="text-warning/50">· {o.flightDate} {o.pickupTime}</span>
-                      </li>
-                    ))}
+                  <p className="font-medium mb-2">缺坐标的订单（{coordWarning.badOrders.length} 条）</p>
+                  <ul className="space-y-1.5 max-h-40 overflow-auto">
+                    {coordWarning.badOrders.map(o => {
+                      const busy = regeocoding.has(o.id)
+                      return (
+                        <li key={o.id} className="flex items-center gap-2">
+                          <span className="font-mono">{o.orderNo}</span>
+                          <span className="text-warning/50">· {o.flightDate} {o.pickupTime}</span>
+                          <button
+                            onClick={() => handleRegeocode(o)}
+                            disabled={busy}
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-warning/40 hover:bg-warning/10 disabled:opacity-50 transition-colors"
+                          >
+                            {busy
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <RefreshCw className="w-3 h-3" />}
+                            <span>重新解析</span>
+                          </button>
+                        </li>
+                      )
+                    })}
                   </ul>
                 </div>
               )}
               {coordWarning.badDrivers.length > 0 && (
                 <div>
-                  <p className="font-medium mb-1">缺坐标的司机（{coordWarning.badDrivers.length} 位）</p>
-                  <ul className="space-y-0.5 max-h-32 overflow-auto">
+                  <p className="font-medium mb-2">缺坐标的司机（{coordWarning.badDrivers.length} 位）</p>
+                  <ul className="space-y-1.5 max-h-40 overflow-auto">
                     {coordWarning.badDrivers.map(d => (
-                      <li key={d.id}>
-                        {d.name} <span className="text-warning/50">· {d.homeAddress || "无住址"}</span>
+                      <li key={d.id} className="flex items-center gap-2">
+                        <span>{d.name}</span>
+                        <span className="text-warning/50">· {d.homeAddress || "无住址"}</span>
+                        <a
+                          href={`/drivers/${d.id}`}
+                          className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-warning/40 hover:bg-warning/10 transition-colors"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          <span>去补全</span>
+                        </a>
                       </li>
                     ))}
                   </ul>
@@ -857,6 +1016,55 @@ export default function DispatchPage() {
               取消派单
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Coord Address Dialog */}
+      <Dialog open={!!editCoordOrder} onOpenChange={open => { if (!open) setEditCoordOrder(null) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>修正地址并重新解析</DialogTitle>
+            <DialogDescription>
+              以下地址无法被地图识别，请修改后点击「重新解析」
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {editPickupFailed && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                  上车地址（解析失败）
+                </label>
+                <Input
+                  value={editPickupAddr}
+                  onChange={e => setEditPickupAddr(e.target.value)}
+                  placeholder="请输入完整地址，如：上海市浦东新区..."
+                  className="text-sm"
+                />
+              </div>
+            )}
+            {editDropoffFailed && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                  目的地（解析失败）
+                </label>
+                <Input
+                  value={editDropoffAddr}
+                  onChange={e => setEditDropoffAddr(e.target.value)}
+                  placeholder="请输入完整地址，如：上海市徐汇区..."
+                  className="text-sm"
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditCoordOrder(null)}>取消</Button>
+            <Button onClick={handleEditGeocode} disabled={editGeocoding}>
+              {editGeocoding && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              重新解析
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

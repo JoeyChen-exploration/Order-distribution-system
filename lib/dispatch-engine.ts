@@ -1,4 +1,4 @@
-import type { Order, Driver, VehicleType } from "./types"
+import type { Order, Driver } from "./types"
 
 /**
  * Cache of pre-fetched Amap driving times.
@@ -89,11 +89,11 @@ export function isWithinWorkingHours(workingHours: string, time: string): boolea
  * 注意：
  * - 商务型（两档）不接经济型订单
  * - 豪华型不接经济型订单（接舒适型属于降级接单）
- * - 导入订单中的旧"商务型"需用户手动细分后才能参与派单
+ * - 数据库中残留的旧"商务型"司机车型视为普通商务型处理
  */
 const VEHICLE_COMPAT: Record<string, string[]> = {
-  豪华商务型: ["豪华商务型", "普通商务型", "豪华型", "舒适型"],
-  普通商务型: ["普通商务型", "豪华型", "舒适型"],
+  豪华商务型: ["豪华商务型", "普通商务型", "商务型", "豪华型", "舒适型"],
+  普通商务型: ["普通商务型", "商务型", "豪华型", "舒适型"],
   豪华型:     ["豪华型", "舒适型"],
   舒适型:     ["舒适型", "经济型"],
   经济型:     ["经济型"],
@@ -105,15 +105,20 @@ function canDriverServeOrder(driverType: string, orderType: string): boolean {
 }
 
 /**
- * 车型降级惩罚（0=完全匹配, 10=降1级, 20=降2级, 30=降3级）
- * 降级越多扣分越多，不兼容返回 999（硬过滤）
+ * 车型降级惩罚（0=完全匹配或等价接单, 10=降1级, 20=降2级, 30=降3级）
+ * 不兼容返回 999（硬过滤）
+ *
+ * 特例：豪华型司机接舒适型订单惩罚为 0——
+ * 豪华型与舒适型在乘客体验上差异较小，且 MRV 已在调度层面保证
+ * 豪华型订单优先匹配豪华型司机，剩余容量无惩罚竞争舒适型订单，提升利用率。
  */
 function getVehicleDowngradePenalty(driverType: string, orderType: string): number {
   const compatible = VEHICLE_COMPAT[driverType]
   if (!compatible) return 999
   const idx = compatible.indexOf(orderType)
-  if (idx < 0)  return 999  // 不兼容
-  if (idx === 0) return 0   // 完全匹配
+  if (idx < 0)  return 999
+  if (idx === 0) return 0
+  if (driverType === "豪华型" && orderType === "舒适型") return 0
   if (idx === 1) return 10
   if (idx === 2) return 20
   return 30
@@ -121,17 +126,11 @@ function getVehicleDowngradePenalty(driverType: string, orderType: string): numb
 
 /**
  * 获取订单的有效车型。
- * 旧版导入的 "商务型" 需要用户细分后存入 metadata["商务类型"]；
- * 未细分的订单返回 "商务型"（调用方需拒绝派单）。
+ * 旧版数据库中残留的 "商务型" 直接视为 "普通商务型"。
  */
 export function getEffectiveOrderVehicleType(order: Order): string {
-  if (order.reqVehicleType !== "商务型") return order.reqVehicleType
-  try {
-    const meta = typeof order.metadata === "string" ? JSON.parse(order.metadata ?? "{}") : (order.metadata ?? {})
-    return (meta["商务类型"] as string) || "商务型"
-  } catch {
-    return "商务型"
-  }
+  if (order.reqVehicleType === "商务型") return "普通商务型"
+  return order.reqVehicleType
 }
 
 /** 从 metadata 读取包车时长（小时），只有 4 和 8 两档，默认 4 */
@@ -176,17 +175,8 @@ function getServiceBuffer(prevType: string | null, newType: string | null, chart
  * 11:30–13:30 午高峰 +10%
  * 17:00–20:00 晚高峰 +55%
  * 22:00–06:00 夜间   -20%
+ * 交通系数仅在 /api/maps/drivetime 服务端叠加，haversine 回退不使用。
  */
-function getTrafficMultiplier(timeStr: string): number {
-  if (!timeStr) return 1.0
-  const [h, m] = timeStr.split(":").map(Number)
-  const mins = h * 60 + m
-  if (mins >= 420  && mins <= 570)  return 1.4
-  if (mins >= 690  && mins <= 810)  return 1.1
-  if (mins >= 1020 && mins <= 1200) return 1.55
-  if (mins >= 1320 || mins <= 360)  return 0.8
-  return 1.0
-}
 
 /**
  * 获取从 from → to 的行驶时间（分钟）
@@ -196,7 +186,6 @@ function getTrafficMultiplier(timeStr: string): number {
 function estimateTravelMinutes(
   fromLat: number, fromLng: number,
   toLat: number, toLng: number,
-  pickupTime?: string,
   cache?: TravelTimeCache,
 ): number {
   if (!fromLat || !fromLng || !toLat || !toLng) return 0
@@ -246,7 +235,6 @@ function hasTimeConflict(
   const travelMinutes = estimateTravelMinutes(
     prevOrder.dropoffLat, prevOrder.dropoffLng,
     nextOrder.pickupLat, nextOrder.pickupLng,
-    nextOrder.pickupTime,
     cache,
   )
 
@@ -320,16 +308,7 @@ export function runDispatchAlgorithm(
   const targetDate = order.flightDate
   const targetTime = order.pickupTime
 
-  // 解析有效订单车型（商务型需用户手动细分）
   const effectiveOrderType = getEffectiveOrderVehicleType(order)
-  if (effectiveOrderType === "商务型") {
-    return {
-      success: false,
-      orderId: order.id,
-      recommendations: [],
-      message: "商务型订单未选择豪华商务/普通商务，请先完成选择",
-    }
-  }
 
   // 过滤：车型兼容 + 状态在岗
   const compatibleDrivers = availableDrivers.filter(
@@ -472,24 +451,60 @@ export function batchDispatch(
   // 本地副本：随批次推进，将已分配订单加入，让后续冲突检测能感知同批次的安排
   const localOrders = [...allOrders]
 
-  // 紧急订单优先，再按服务时间排序
-  const sortedOrders = [...orders].sort((a, b) => {
-    if (a.isEmergency && !b.isEmergency) return -1
-    if (!a.isEmergency && b.isEmergency) return 1
-    const dtA = `${a.flightDate} ${a.pickupTime}`
-    const dtB = `${b.flightDate} ${b.pickupTime}`
-    return dtA.localeCompare(dtB)
-  })
-
-  for (const order of sortedOrders) {
-    // 所有司机始终作为候选，时间冲突由算法内部检测和降分
+  const processOrder = (order: Order) => {
     const result = runDispatchAlgorithm(order, drivers, localOrders, travelCache)
     results.set(order.id, result)
-
     if (result.bestMatch) {
-      // 将该订单以"已分配"状态加入本地列表，供后续订单的冲突检测使用
       localOrders.push({ ...order, driverId: result.bestMatch.driverId, status: 1 as const })
     }
+  }
+
+  // ① 紧急订单：按时间升序优先处理
+  const emergencies = orders
+    .filter(o => o.isEmergency)
+    .sort((a, b) => `${a.flightDate} ${a.pickupTime}`.localeCompare(`${b.flightDate} ${b.pickupTime}`))
+  for (const order of emergencies) processOrder(order)
+
+  // ② 普通订单：MRV（最小剩余值）动态排序
+  // 每轮选"当前可用司机最少"的订单优先派，防止高峰期贪心消耗司机导致后续订单无人可派
+  const remaining = orders.filter(o => !o.isEmergency)
+
+  while (remaining.length > 0) {
+    let minCount = Infinity
+    let minIdx = 0
+
+    for (let i = 0; i < remaining.length; i++) {
+      const order = remaining[i]
+      const effectiveType = getEffectiveOrderVehicleType(order)
+      let count = 0
+
+      for (const driver of drivers) {
+        if (driver.status !== "available" && driver.status !== "busy") continue
+        if (!canDriverServeOrder(driver.vehicleType, effectiveType)) continue
+        if (driver.workingHours && order.pickupTime &&
+            !isWithinWorkingHours(driver.workingHours, order.pickupTime)) continue
+        // 检查是否与当前已分配订单存在时间冲突
+        const assigned = getDriverAssignedOrders(driver.id, localOrders)
+        let blocked = false
+        for (const existing of assigned) {
+          if (!existing.pickupTime || !order.pickupTime) continue
+          const { conflict } = hasTimeConflict(existing, order, travelCache)
+          if (conflict) { blocked = true; break }
+        }
+        if (!blocked) count++
+      }
+
+      // 平局：时间早的优先（与原来行为保持连贯）
+      const t = `${order.flightDate} ${order.pickupTime}`
+      const tMin = `${remaining[minIdx].flightDate} ${remaining[minIdx].pickupTime}`
+      if (count < minCount || (count === minCount && t < tMin)) {
+        minCount = count
+        minIdx = i
+      }
+    }
+
+    const [order] = remaining.splice(minIdx, 1)
+    processOrder(order)
   }
 
   return results

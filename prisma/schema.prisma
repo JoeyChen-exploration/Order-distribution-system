@@ -87,3 +87,12 @@ model ImportBatch {
 
   orders Order[]
 }
+
+model DispatchHistory {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  totalOrders Int
+  matched     Int
+  unmatched   Int
+  items       String   // JSON: DispatchHistoryItem[]
+}
