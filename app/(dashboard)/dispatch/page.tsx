@@ -251,8 +251,8 @@ export default function DispatchPage() {
   }
 
   const coordWarning = useMemo(() => {
-    const badOrders = pendingOrders.filter(o => !o.pickupLat || !o.pickupLng)
-    const badDrivers = drivers.filter(d => !d.homeLat || !d.homeLng)
+    const badOrders = pendingOrders.filter(o => !o.pickupLat || !o.pickupLng || o.pickupLat === 0 || o.pickupLng === 0)
+    const badDrivers = drivers.filter(d => !d.homeLat || !d.homeLng || d.homeLat === 0 || d.homeLng === 0)
     return {
       ordersNoCoord: badOrders.length,
       driversNoCoord: badDrivers.length,

@@ -17,7 +17,6 @@ import { createOrder } from "@/lib/store"
 
 // ─── 常量 ────────────────────────────────────────────────────────────────────
 
-const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
 
 const FIELD_MAP: Record<string, string> = {
   "订单号": "orderNo", "预订车型": "reqVehicleType",
@@ -84,13 +83,10 @@ async function tryGeocode(address: string): Promise<{ lat: number; lng: number }
   try {
     const city = extractCity(address)
     const res = await fetch(
-      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=${encodeURIComponent(city)}`
+      `/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`
     )
     const data = await res.json()
-    if (data.status === "1" && data.geocodes?.length > 0) {
-      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
-      return { lat, lng }
-    }
+    if (data.lat && data.lng) return { lat: data.lat, lng: data.lng }
   } catch {}
   return null
 }

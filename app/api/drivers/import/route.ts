@@ -3,19 +3,16 @@ import { db } from "@/lib/db"
 import * as XLSX from "xlsx"
 
 const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
-const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
 
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
   if (!address) return { lat: 0, lng: 0 }
   try {
+    const base = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
     const res = await fetch(
-      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=上海`
+      `${base}/api/geocode?address=${encodeURIComponent(address)}&city=上海`
     )
     const data = await res.json()
-    if (data.status === "1" && data.geocodes?.length > 0) {
-      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
-      return { lat, lng }
-    }
+    if (data.lat && data.lng) return { lat: data.lat, lng: data.lng }
   } catch {}
   return { lat: 0, lng: 0 }
 }
@@ -30,13 +27,36 @@ function str(v: unknown): string {
 }
 
 // POST /api/drivers/import  — multipart form: file
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+const ALLOWED_MIME_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+  "text/csv",
+  "application/octet-stream", // some browsers send this for xlsx
+])
+const MAX_ROWS = 5000
+
 export async function POST(req: NextRequest) {
+  try {
   const formData = await req.formData()
   const file = formData.get("file") as File | null
   const importedBy = (formData.get("importedBy") as string) || "unknown"
 
   if (!file) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 })
+  }
+
+  if (file.size > MAX_FILE_SIZE) {
+    return NextResponse.json({ error: "文件不能超过 10 MB" }, { status: 400 })
+  }
+
+  const ext = file.name.split(".").pop()?.toLowerCase()
+  if (!ext || !["xlsx", "xls", "csv"].includes(ext)) {
+    return NextResponse.json({ error: "仅支持 xlsx / xls / csv 格式" }, { status: 400 })
+  }
+
+  if (file.type && !ALLOWED_MIME_TYPES.has(file.type)) {
+    return NextResponse.json({ error: "文件类型不支持" }, { status: 400 })
   }
 
   const buffer = Buffer.from(await file.arrayBuffer())
@@ -48,6 +68,10 @@ export async function POST(req: NextRequest) {
 
   if (raw.length < 2) {
     return NextResponse.json({ error: "文件内容不足" }, { status: 400 })
+  }
+
+  if (raw.length > MAX_ROWS) {
+    return NextResponse.json({ error: `文件行数不能超过 ${MAX_ROWS} 行` }, { status: 400 })
   }
 
   // 第一行是表头，找到各列的位置
@@ -151,4 +175,7 @@ export async function POST(req: NextRequest) {
     errors,
     detectedHeaders: headerRow,
   })
+  } catch {
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
 }
