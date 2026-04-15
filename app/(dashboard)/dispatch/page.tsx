@@ -49,6 +49,7 @@ import { format } from "date-fns"
 import { zhCN } from "date-fns/locale"
 import { getOrders, getDrivers, updateOrder, updateDriver } from "@/lib/store"
 import { runDispatchAlgorithm, batchDispatch, type DispatchResult, type TravelTimeCache } from "@/lib/dispatch-engine"
+import { getDriveTime } from "@/lib/drivetime-client"
 import type { Order, Driver } from "@/lib/types"
 import { VEHICLE_TYPE_COLORS, VEHICLE_TYPE_OPTIONS } from "@/lib/types"
 
@@ -277,8 +278,7 @@ export default function DispatchPage() {
         if (!fromLat || !fromLng) return
         const key = `${fromLng},${fromLat}->${order.pickupLng},${order.pickupLat}`
         try {
-          const res = await fetch(`/api/maps/drivetime?originLng=${fromLng}&originLat=${fromLat}&destLng=${order.pickupLng}&destLat=${order.pickupLat}&pickupTime=${encodeURIComponent(order.pickupTime)}`)
-          const data = await res.json()
+          const data = await getDriveTime(fromLng, fromLat, order.pickupLng, order.pickupLat, order.pickupTime)
           if (data.durationMinutes > 0) travelCache.set(key, data.durationMinutes)
         } catch {}
       }))
@@ -345,8 +345,7 @@ export default function DispatchPage() {
         if (seen.has(key)) continue
         seen.add(key)
         routeTasks.push(() =>
-          fetch(`/api/maps/drivetime?originLng=${fromLng}&originLat=${fromLat}&destLng=${order.pickupLng}&destLat=${order.pickupLat}&pickupTime=${encodeURIComponent(order.pickupTime)}`)
-            .then(r => r.json())
+          getDriveTime(fromLng, fromLat, order.pickupLng, order.pickupLat, order.pickupTime)
             .then(data => { if (data.durationMinutes > 0) travelCache.set(key, data.durationMinutes) })
             .catch(() => {})
         )
@@ -358,7 +357,7 @@ export default function DispatchPage() {
     if (totalRoutes > 0) {
       setDispatchProgress({ phase: "prefetch", current: 0, total: totalRoutes })
       let completed = 0
-      const QPS = 3  // Amap free tier limit
+      const QPS = 10  // browser-direct calls — no server proxy overhead
 
       // Concurrency-limited runner: keep exactly QPS tasks in-flight at all times
       await new Promise<void>(resolve => {
