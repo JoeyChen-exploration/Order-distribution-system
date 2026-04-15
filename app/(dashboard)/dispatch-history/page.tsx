@@ -93,44 +93,71 @@ export default function DispatchHistoryPage() {
       .catch(() => setLoading(false))
   }, [])
 
-  const exportCsv = (rec: DispatchHistoryRecord) => {
+  const exportCsv = async (rec: DispatchHistoryRecord) => {
+    // 拉取完整订单数据以获取 metadata（历史记录只存了派单结果，原始字段在订单里）
+    let orderMap: Record<string, Record<string, string>> = {}
+    try {
+      const res = await fetch("/api/orders")
+      const orders = await res.json()
+      if (Array.isArray(orders)) {
+        for (const o of orders) {
+          let meta: Record<string, string> = {}
+          try { meta = JSON.parse(o.metadata || "{}") } catch {}
+          orderMap[o.id] = { ...meta, _flightNo: o.flightNo ?? "", _flightDate: o.flightDate ?? "", _pickupTime: o.pickupTime ?? "" }
+        }
+      }
+    } catch {}
+
     const headers = [
       "订单号", "预订车型", "服务类型", "服务城市", "服务日期",
       "三字码", "人数", "下单时间", "航班号", "上车点", "下车点",
       "车号", "司机", "司机电话", "司机分组", "实际车型",
       "架次", "公里数", "服务标准", "举牌服务", "备注",
     ]
+
+    const normaliseDate = (date: string, time: string) => {
+      // 统一格式为 YYYY-MM-DD HH:MM:00，处理斜杠和不补零的情况
+      const d = date.replace(/\//g, "-").split("-").map(p => p.padStart(2, "0")).join("-")
+      const t = time ? time.split(":").map(p => p.padStart(2, "0")).join(":") + ":00" : "00:00:00"
+      return d ? `${d} ${t}` : ""
+    }
+
     const rows = rec.items.map(i => {
-      let m: Record<string, string> = {}
-      try { m = JSON.parse(i.metadata || "{}") } catch {}
-      const g = (k: string, fallback = "") => m[k] ?? fallback
-      const serviceDate = i.flightDate && i.pickupTime
-        ? `${i.flightDate} ${i.pickupTime}:00`
-        : i.flightDate ?? ""
+      const om = orderMap[i.orderId] ?? {}
+      // 历史记录存的 metadata 优先，否则从当前订单取
+      let hm: Record<string, string> = {}
+      try { hm = JSON.parse(i.metadata || "{}") } catch {}
+      const g = (k: string, ck: string) => hm[k] || hm[ck] || om[k] || om[ck] || ""
+
+      const flightDate = om._flightDate || i.flightDate || ""
+      const pickupTime = om._pickupTime || i.pickupTime || ""
+      const serviceDate = normaliseDate(flightDate, pickupTime)
+
       return [
         i.orderNo,
         i.reqVehicleType,
-        i.serviceType || g("服务类型") || g("serviceType"),
-        g("服务城市") || g("serviceCity"),
+        i.serviceType || g("服务类型", "serviceType"),
+        g("服务城市", "serviceCity"),
         serviceDate,
-        g("三字码") || g("airportCode"),
-        g("人数") || g("passengerCount"),
-        g("下单时间") || g("submittedAt"),
-        i.flightNo,
+        g("三字码", "airportCode"),
+        g("人数", "passengerCount"),
+        g("下单时间", "submittedAt"),
+        om._flightNo || i.flightNo,
         i.pickupAddress,
         i.dropoffAddress,
         i.vehiclePlate ?? "",
         i.driverName ?? "",
         i.driverPhone ?? "",
-        g("司机分组") || g("driverGroup"),
+        g("司机分组", "driverGroup"),
         i.vehicleType ?? "",
-        g("架次") || g("tripNo"),
-        g("公里数") || g("kilometers"),
-        g("服务标准") || g("serviceStandard"),
-        g("举牌服务") || g("signService"),
-        g("备注") || g("remarks"),
+        g("架次", "tripNo"),
+        g("公里数", "kilometers"),
+        g("服务标准", "serviceStandard"),
+        g("举牌服务", "signService"),
+        g("备注", "remarks"),
       ].map(v => `"${String(v).replace(/"/g, '""')}"`)
     })
+
     const dateStr = rec.createdAt.slice(0, 10).replace(/-/g, "")
     const csv = "\ufeff" + [headers, ...rows].map(r => r.join(",")).join("\n")
     const a = document.createElement("a")
