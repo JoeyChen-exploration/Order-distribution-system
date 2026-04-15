@@ -9,6 +9,12 @@ npm install
 npm run dev
 ```
 
+`.env.local`（需自行创建，已加入 `.gitignore`）：
+```
+NEXT_PUBLIC_AMAP_KEY=你的高德 Web Service Key
+AVIATIONSTACK_API_KEY=你的密钥
+```
+
 ---
 
 ## 技术栈
@@ -18,7 +24,7 @@ npm run dev
 | 框架 | Next.js 14 App Router + TypeScript |
 | UI | Tailwind CSS + shadcn/ui |
 | ORM | Prisma + LibSQL (SQLite) |
-| 地图 | 高德地图 REST API（地理编码 + 驾车路径规划） |
+| 地图 | 高德地图 REST API（地理编码 + 驾车路径规划，浏览器直连） |
 | 航班 | AviationStack REST API |
 | 文件解析 | xlsx (SheetJS) |
 
@@ -29,20 +35,25 @@ npm run dev
 ```
 app/
   (dashboard)/
-    overview/          数据概览
-    orders/            订单管理（列表、筛选、导出账单）
-    orders/create/     新建订单（支持接机/送机/包车/市内约车）
-    drivers/           司机管理（列表、导入弹窗、一键空闲）
-    dispatch/          排单控制台（批量/智能/手动派单）
+    overview/            数据概览
+    orders/              订单管理（列表、筛选、内联地址编辑、导出账单）
+    orders/import/       订单批量导入（xlsx/csv）
+    drivers/             司机管理（列表、导入弹窗、一键空闲）
+    drivers/create/      新建司机
+    dispatch/            排单控制台（批量/智能/手动派单）
+    dispatch-history/    派单历史（每次确认后自动保存，支持按批次导出 CSV）
   api/
-    maps/drivetime/    高德驾车时间代理（服务端，防止 Key 泄漏）
-    flights/status/    航班状态查询代理
+    geocode/             地理编码代理（服务端备用，主路径已改为浏览器直连）
+    maps/drivetime/      高德驾车时间代理（服务端备用）
+    flights/status/      航班状态查询代理
 components/
-  order-import-dialog  订单导入弹窗
+  order-import-dialog    订单导入弹窗
 lib/
-  dispatch-engine.ts   核心排单算法
-  store.ts             数据库 CRUD 封装
-  types.ts             类型定义
+  dispatch-engine.ts     核心排单算法（MRV + 评分）
+  geocode-client.ts      浏览器端地理编码（直连高德，绕过服务端网络限制）
+  drivetime-client.ts    浏览器端驾车时间查询（直连高德）
+  store.ts               数据库 CRUD 封装
+  types.ts               类型定义
 ```
 
 ---
@@ -70,7 +81,7 @@ lib/
 | 舒适型 | 舒适型、经济型 | |
 | 经济型 | 经济型 | |
 
-> **商务型自动归档**：从 Excel 导入的「商务型」订单在入库时自动转为「普通商务型」，并在 `metadata["原车型"]` 记录原始值。订单管理顶部蓝色提示条列出可选择升级为「豪华商务型」的订单，点击订单号直接升级，不再阻断派单。
+> **商务型自动归档**：从 Excel 导入的「商务型」订单在入库时自动转为「普通商务型」，并在 `metadata["原车型"]` 记录原始值。订单管理顶部蓝色提示条列出可选择升级为「豪华商务型」的订单，不阻断派单。
 
 ---
 
@@ -96,7 +107,7 @@ distanceScore = max(0, 100 - 距离km × 2)
 - 否则 → 司机的**家庭地址坐标**
 
 终点为订单**上车点坐标**。
-优先使用批量预取的高德行驶时间（`TravelTimeCache`），无缓存时退回 haversine 直线距离。
+优先使用批量预取的高德实际行驶时间（`TravelTimeCache`），无缓存时退回 haversine 直线距离。
 
 > ⚠️ 坐标为 0（未 geocode）时此维度得 0 分，算法退化为只靠车型评分。
 
@@ -117,7 +128,7 @@ required = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
 实际间隔 < required → 冲突
 ```
 
-**serviceBuffer**（业务最小间隔，pickup→pickup 时间差下限，动态行驶时间叠加在此之上）：
+**serviceBuffer**（业务最小间隔，pickup→pickup 时间差下限）：
 
 | 前单类型 | 后单类型 | serviceBuffer | 说明 |
 |---|---|---|---|
@@ -127,10 +138,6 @@ required = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
 | 包车（4h） | 任意 | 240 分钟 | |
 | 包车（8h） | 任意 | 480 分钟 | |
 | 市内约车 | 任意 | 60 分钟 | |
-
-> **行驶时间来源**：前单下车点 → 后单上车点，haversine 35 km/h 估算（无额外交通系数）。预取缓存方向为「司机起点 → 订单上车点」，与冲突检测方向不同，无法命中缓存。
->
-> **坐标缺失处理**：travelMinutes = 0，required = serviceBuffer。导入时会弹出警告提示处理坐标问题，不应带缺坐标订单进行派单。
 
 有冲突时 `timeConflictPenalty = 50`，扣 50 × 0.25 = 12.5 分，但**不直接排除**（有冲突司机仍进推荐列表，只是不作为 bestMatch）。
 
@@ -153,9 +160,9 @@ required = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
 ```
 ① 紧急订单按时间升序优先处理
 ↓
-② 并发预取所有「司机有效位置 → 订单上车点」路线
-   （22 司机 × ~26 唯一上车点 ≈ 572 条，去重后并发请求）
-   进度：预取路线数据 X / 572
+② 浏览器直连高德批量预取「司机有效位置 → 订单上车点」实际行驶时间
+   QPS = 3（高德免费版限制），去重后约 500–800 条路线
+   进度弹窗实时显示：正在调用高德地图 API X / N
 ↓
 ③ 普通订单：MRV（最小剩余值）动态排序
    每轮选「当前可用司机最少」的订单优先派
@@ -170,19 +177,44 @@ required = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
 
 ---
 
-## 动态行驶时间（/api/maps/drivetime）
+## 地理编码（lib/geocode-client.ts）
 
-服务端代理高德驾车路径规划 API，避免 Key 暴露在浏览器端。
+所有地理编码均在**浏览器端**直连高德 REST API，使用 `NEXT_PUBLIC_AMAP_KEY`：
 
-**请求**：
 ```
-GET /api/maps/drivetime?originLng=&originLat=&destLng=&destLat=&pickupTime=HH:MM
+GET https://restapi.amap.com/v3/geocode/geo?address=<地址>&key=<KEY>&city=<自动提取>
 ```
 
-**返回**：
-```json
-{ "durationMinutes": 42, "distanceKm": 18.3, "source": "amap" }
+- 订单导入 / 地址编辑：`pickupAddress` → `pickupLat/pickupLng`，`dropoffAddress` → `dropoffLat/dropoffLng`
+- 司机创建：`homeAddress` → `homeLat/homeLng`
+- `city` 参数从地址前缀自动提取（如"苏州市"→苏州，"上海市"→上海），支持跨城市订单
+- 地址预处理：剥离品牌前缀、邮编后缀、"中国"前缀，截断至 60 字符
+
+**英文地址处理**（order-import-dialog）：
+1. 内置别名表（常见机场/车站英文名 → 中文），优先匹配
+2. 去括号导航提示后重试
+3. 逗号分割后逐段尝试（最后一段往往是酒店/地标名）
+4. 均失败 → 坐标存 0,0，导入完成后弹出警告列表
+
+**手动地址修正**：
+- 订单管理展开行 → 点击「修改地址」→ 编辑上/下车地址 → 实时解析预览 → 保存
+- 排单控制台「重新解析」按钮：坐标缺失时弹出编辑对话框，修正后重新调用高德
+
+> 服务端 `/api/geocode` 路由仍保留，作为司机 xlsx 批量导入的备用路径（服务端任务无法使用浏览器客户端）。
+
+---
+
+## 驾车时间（lib/drivetime-client.ts）
+
+批量派单路线预取同样在**浏览器端**直连高德驾车路径规划 API：
+
 ```
+GET https://restapi.amap.com/v3/direction/driving?origin=lng,lat&destination=lng,lat&key=KEY
+```
+
+- 5 秒超时，超时则不写入缓存（调度引擎内部退回 haversine 估算）
+- 不使用直线距离作为虚假"真实路线"的替代值
+- 返回结果叠加时段交通系数（见下表）
 
 **交通系数**（叠加在高德 base duration 上）：
 
@@ -194,75 +226,21 @@ GET /api/maps/drivetime?originLng=&originLat=&destLng=&destLat=&pickupTime=HH:MM
 | 22:00–06:00 夜间 | ×0.8 |
 | 其余 | ×1.0 |
 
-> ⚠️ haversine 回退路径**不叠加**交通系数（35 km/h 已是保守估算，防止双重惩罚）。
-
-**高德 QPS 限制**：免费 Web Service 账号 3次/秒。572 条路线并发触发限流时，超限的请求自动降级为 haversine 估算，派单功能不中断，但部分路线时间精度下降。如需稳定使用建议开通高德付费套餐（基础LBS服务 30元/万次，按 572次/批 = 约 0.17元/次批量派单）。
+**高德 QPS 限制**：免费 Web Service 账号 3次/秒。500–800 条路线约需 70–90 秒完成预取。如需提速建议开通高德付费套餐（基础LBS服务 30元/万次）。
 
 ---
 
-## 地理编码
+## 派单历史（dispatch-history）
 
-导入时自动调用高德 REST API：
+每次点击「确认全部派单」后自动保存一条历史记录，包含：
+- 总单数 / 已匹配 / 未匹配 及匹配率进度条
+- 每条订单的派单结果（司机、车牌、评分、失败原因）
 
-```
-GET https://restapi.amap.com/v3/geocode/geo?address=<地址>&key=<KEY>&city=<自动提取>
-```
+**CSV 导出**：每条历史记录右上角「导出 CSV」按钮，导出时实时从订单库取完整 metadata，列格式与账单 Excel 完全对齐：
 
-- 订单：`pickupAddress` → `pickupLat/pickupLng`，`dropoffAddress` → `dropoffLat/dropoffLng`
-- 司机：`homeAddress` → `homeLat/homeLng`
-- `city` 参数从地址前缀自动提取（如"苏州市"→苏州，"上海市"→上海），支持跨城市订单
+> 订单号、预订车型、服务类型、服务城市、服务日期、三字码、人数、下单时间、航班号、上车点、下车点、车号、司机、司机电话、司机分组、实际车型、架次、公里数、服务标准、举牌服务、备注
 
-**英文地址处理**：
-1. 内置别名表（常见机场/车站英文名 → 中文），优先匹配
-2. 逗号分割后逐段尝试（最后一段往往是酒店/地标名）
-3. 两步均失败 → 导入后弹出警告列表，提示手动处理
-
-**服务类型字段存储**：「服务类型」列以中文 key `服务类型` 存入 `metadata`，算法同时兼容老数据的英文 key `serviceType`。未被识别的类型值（如"点对点"）自动映射为"市内约车"。
-
-**环境变量配置**（`.env.local`）：
-```
-AMAP_KEY=你的高德 Web Service Key
-```
-所有高德 API 调用均通过服务端代理（`/api/geocode`、`/api/maps/drivetime`），Key 不暴露在浏览器端。
-
----
-
-## 服务类型
-
-系统支持四种服务类型，从 Excel「服务类型」列导入，影响时间冲突间隔和显示样式：
-
-| 服务类型 | 颜色 | 说明 |
-|---|---|---|
-| 接机/站 | 蓝色（sky） | 机场/车站接乘客 |
-| 送机/站 | 橙色（amber） | 送乘客至机场/车站 |
-| 包车 | 绿色（emerald） | 需选择 4h 或 8h，未选时显示"待确认时长"警告 |
-| 市内约车 | 紫色（violet） | 市内点对点，serviceBuffer = 60 min |
-
-**包车时长**存储在 `order.metadata["包车时长"]`（值为 `"4"` 或 `"8"`），可在订单管理下拉菜单中设置。
-
-订单管理页顶部提示条：
-- **橙色**：包车订单未选时长（影响 serviceBuffer 计算，**阻断批量派单**）
-- **蓝色**：从「商务型」自动归入普通商务型的订单，提示可选择升级为豪华商务型（**不阻断派单**）
-
----
-
-## 航班状态查询
-
-订单管理页点击"刷新航班"，批量查询当前筛选结果中所有唯一航班的实时状态：
-
-| 标识 | 含义 |
-|---|---|
-| 绿色"正常" | 航班准时 |
-| 橙色"延误 N 分" | 延误超过 15 分钟 |
-| 红色"取消" | 航班取消 |
-| 蓝色"已落地" | 航班已着陆 |
-
-**配置**：在 `.env.local` 中添加：
-```
-AMAP_KEY=你的高德 Web Service Key
-AVIATIONSTACK_API_KEY=你的密钥
-```
-免费账号 100次/月，够测试。生产环境建议升级或接入飞常准 API。
+服务日期格式统一输出为 `YYYY-MM-DD HH:MM:00`。
 
 ---
 
@@ -273,9 +251,9 @@ AVIATIONSTACK_API_KEY=你的密钥
 
 ### 批量派单
 勾选待派单 → 点击「批量智能派单」：
-- 进度弹窗显示路线预取进度（X / 572）
+- 进度弹窗显示路线预取进度（X / N）
 - 计算完成后显示汇总结果（匹配成功数 / 总数）
-- 点击「确认全部派单」一键写入
+- 点击「确认全部派单」一键写入，结果自动保存到派单历史
 
 ### 手动派单
 点击「手动」按钮 → 选择司机 → 确认（绕过算法，强制分配）。
@@ -301,7 +279,7 @@ AVIATIONSTACK_API_KEY=你的密钥
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | 订单号 | ✓ | 唯一标识 |
-| 预订车型 | ✓ | 舒适型/豪华型/普通商务型/豪华商务型/经济型；「商务型」自动归为普通商务型，可在订单管理升级为豪华商务型 |
+| 预订车型 | ✓ | 舒适型/豪华型/普通商务型/豪华商务型/经济型；「商务型」自动归为普通商务型 |
 | 服务类型 | ✓ | 接机/站、送机/站、包车、市内约车（"点对点"自动映射为市内约车） |
 | 服务日期 | ✓ | YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DD |
 | 上车点 | ✓ | 用于 geocoding |
@@ -322,11 +300,26 @@ AVIATIONSTACK_API_KEY=你的密钥
 
 ---
 
+## 航班状态查询
+
+订单管理页点击"刷新航班"，批量查询当前筛选结果中所有唯一航班的实时状态：
+
+| 标识 | 含义 |
+|---|---|
+| 绿色"正常" | 航班准时 |
+| 橙色"延误 N 分" | 延误超过 15 分钟 |
+| 红色"取消" | 航班取消 |
+| 蓝色"已落地" | 航班已着陆 |
+
+免费账号 100次/月，够测试。生产环境建议升级或接入飞常准 API。
+
+---
+
 ## 安全说明
 
 | 措施 | 实现 |
 |---|---|
-| API Key 隔离 | 高德 Key 存于 `.env.local`（已在 `.gitignore`），客户端组件通过 `/api/geocode` 服务端代理调用，Key 不暴露浏览器 |
+| API Key 管理 | 高德 Key 以 `NEXT_PUBLIC_AMAP_KEY` 存于 `.env.local`（已在 `.gitignore`）。`NEXT_PUBLIC_` 前缀允许浏览器直连高德，绕过服务端网络限制；生产部署时应通过环境变量注入，不提交到代码库 |
 | 密码哈希 | 用户密码使用 bcryptjs（cost 12）存储；首次登录时自动将旧版明文密码迁移为哈希值 |
 | 字段白名单 | PATCH/POST 路由对请求体做字段白名单过滤，拒绝写入不允许的字段 |
 | 错误信息隔离 | 所有 catch 块返回通用 "Internal server error"，不向客户端暴露堆栈或文件路径 |
@@ -340,14 +333,11 @@ AVIATIONSTACK_API_KEY=你的密钥
 
 | 问题 | 说明 |
 |---|---|
-| 高德 QPS 3次/秒 | 路线预取并发触发限流，超限部分降级为 haversine，建议开通付费套餐（30元/万次） |
+| 高德 QPS 3次/秒 | 路线预取受免费版限速，500–800 条路线约需 70–90 秒，建议开通付费套餐（30元/万次） |
 | 冲突检测行驶时间用 haversine | 预取缓存方向（司机→上车点）与冲突所需方向（前单下车点→后单上车点）不同，无法命中缓存 |
-| 商务型/豪华型均不接经济型 | 商务型（两档）和豪华型司机拒绝经济型订单，防止高档司机亏损接单 |
+| 商务型/豪华型均不接经济型 | 防止高档司机亏损接单 |
 | MRV 复杂度 O(N²·D) | 每轮遍历所有剩余订单 × 司机，100单×22司机约百万次简单运算，实测无感知延迟 |
 | 无每日接单上限 | 工作量不参与评分，司机理论上可被无限派单（可通过工作时间配置间接限制） |
-| 坐标缺失时距离权重失效 | 重新导入数据（geocoding 生效后）可解决 |
-| 工作时间为硬过滤 | 超出时段 1 分钟即排除，无缓冲区 |
+| 坐标缺失时距离权重失效 | 在订单管理或排单控制台手动修正地址后重新 geocode 可解决 |
 | 包车时长需手动确认 | 导入时无法从 Excel 自动读取时长，需在订单管理手动选择 4h/8h |
-| 商务型自动归档 | Excel「商务型」自动归为普通商务型，可在订单管理蓝色提示条中逐条升级为豪华商务型 |
-| 司机车型为运营设置 | 司机导入时默认沿用 Excel 的车型，可在司机管理下拉菜单随时调整 |
-| 历史数据服务类型 key 为英文 | 早期导入的订单 metadata 存的是 `serviceType`，算法已兼容双 key 读取，重导入后统一为中文 key |
+| 旧历史记录 metadata 缺失 | 早期保存的派单历史缺少 metadata，导出时会从当前订单库补全；若订单已删除则相关列为空 |
