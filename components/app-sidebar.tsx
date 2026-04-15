@@ -14,8 +14,10 @@ import {
   Car,
   ChevronLeft,
   ChevronRight,
+  History,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DateTimeClock } from '@/components/date-time-clock'
 import { useState } from 'react'
 
 const navItems = [
@@ -23,6 +25,7 @@ const navItems = [
   { href: '/orders', label: '订单管理', icon: ClipboardList },
   { href: '/drivers', label: '司机管理', icon: Users },
   { href: '/dispatch', label: '排单控制台', icon: Send },
+  { href: '/dispatch-history', label: '派单历史', icon: History },
   { href: '/settings', label: '系统设置', icon: Settings, adminOnly: true },
 ]
 
@@ -89,6 +92,13 @@ export function AppSidebar() {
           })}
         </ul>
       </nav>
+
+      {/* Date Time */}
+      {!collapsed && (
+        <div className="px-4 py-3 border-t border-sidebar-border">
+          <DateTimeClock />
+        </div>
+      )}
 
       {/* User Info */}
       <div className="p-3 border-t border-sidebar-border">

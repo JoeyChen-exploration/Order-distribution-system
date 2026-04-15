@@ -37,9 +37,11 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { getDrivers, updateDriver, deleteDriver } from '@/lib/store'
-import type { Driver, DriverStatus } from '@/lib/types'
-import { DRIVER_STATUS_LABELS, VEHICLE_TYPE_LABELS } from '@/lib/types'
+import type { Driver, DriverStatus, VehicleType } from '@/lib/types'
+import { DRIVER_STATUS_LABELS, VEHICLE_TYPE_LABELS, VEHICLE_TYPE_OPTIONS, VEHICLE_TYPE_COLORS } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Progress } from '@/components/ui/progress'
 import {
   Plus,
   Search,
@@ -54,6 +56,10 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
+  Loader2,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from 'lucide-react'
 
 const STATUS_COLORS: Record<DriverStatus, string> = {
@@ -61,6 +67,20 @@ const STATUS_COLORS: Record<DriverStatus, string> = {
   busy: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   off_duty: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
   on_leave: 'bg-red-500/20 text-red-400 border-red-500/30',
+}
+
+const VEHICLE_TYPE_ORDER: Record<string, number> = {
+  '豪华商务型': 0, '普通商务型': 1, '豪华型': 2, '舒适型': 3, '经济型': 4, '商务型': 5,
+}
+const STATUS_ORDER: Record<string, number> = {
+  available: 0, busy: 1, off_duty: 2, on_leave: 3,
+}
+
+type SortField = 'name' | 'vehiclePlate' | 'vehicleType' | 'workingHours' | 'status'
+
+function SortIcon({ field, sortField, sortDir }: { field: SortField; sortField: SortField | null; sortDir: 'asc' | 'desc' }) {
+  if (sortField !== field) return <ChevronsUpDown className="w-3 h-3 opacity-40" />
+  return sortDir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
 }
 
 interface ImportResult {
@@ -78,13 +98,29 @@ export default function DriversPage() {
   const [vehicleFilter, setVehicleFilter] = useState<string>('all')
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [driverToDelete, setDriverToDelete] = useState<Driver | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
+  const [batchMode, setBatchMode] = useState(false)
+  const [sortField, setSortField] = useState<SortField | null>('vehicleType')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortDir('asc')
+    }
+  }
 
   // xlsx import state
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState(0)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const importTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadDrivers = async () => {
     const data = await getDrivers()
@@ -96,7 +132,7 @@ export default function DriversPage() {
   }, [])
 
   useEffect(() => {
-    let result = drivers
+    let result = [...drivers]
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
@@ -116,11 +152,37 @@ export default function DriversPage() {
       result = result.filter(d => d.vehicleType === vehicleFilter)
     }
 
+    if (sortField) {
+      result.sort((a, b) => {
+        let cmp = 0
+        if (sortField === 'name')         cmp = a.name.localeCompare(b.name, 'zh-CN')
+        if (sortField === 'vehiclePlate') cmp = a.vehiclePlate.localeCompare(b.vehiclePlate)
+        if (sortField === 'vehicleType') {
+          const aType = a.vehicleType === "商务型" ? "普通商务型" : a.vehicleType
+          const bType = b.vehicleType === "商务型" ? "普通商务型" : b.vehicleType
+          cmp = (VEHICLE_TYPE_ORDER[aType] ?? 9) - (VEHICLE_TYPE_ORDER[bType] ?? 9)
+        }
+        if (sortField === 'workingHours') cmp = (a.workingHours ?? '').localeCompare(b.workingHours ?? '')
+        if (sortField === 'status')       cmp = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9)
+        return sortDir === 'asc' ? cmp : -cmp
+      })
+    }
+
     setFilteredDrivers(result)
-  }, [drivers, searchQuery, statusFilter, vehicleFilter])
+  }, [drivers, searchQuery, statusFilter, vehicleFilter, sortField, sortDir])
 
   const handleStatusChange = async (driverId: string, newStatus: DriverStatus) => {
     await updateDriver(driverId, { status: newStatus })
+    await loadDrivers()
+  }
+
+  const handleVehicleTypeChange = async (driverId: string, newType: VehicleType) => {
+    await updateDriver(driverId, { vehicleType: newType })
+    await loadDrivers()
+  }
+
+  const handleSetAllFree = async () => {
+    await Promise.all(drivers.map(d => d.status !== 'available' ? updateDriver(d.id, { status: 'available' }) : Promise.resolve()))
     await loadDrivers()
   }
 
@@ -138,6 +200,33 @@ export default function DriversPage() {
     setDeleteDialogOpen(true)
   }
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredDrivers.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredDrivers.map(d => d.id)))
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    await fetch('/api/drivers/batch-delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: Array.from(selectedIds) }),
+    })
+    setSelectedIds(new Set())
+    setBatchDeleteOpen(false)
+    await loadDrivers()
+  }
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
@@ -149,34 +238,78 @@ export default function DriversPage() {
   const handleImport = async () => {
     if (!importFile) return
     setImporting(true)
+    setImportProgress(0)
+
+    // Animate progress to ~85% while server processes
+    let fake = 0
+    importTimerRef.current = setInterval(() => {
+      fake = Math.min(fake + Math.random() * 7 + 1, 85)
+      setImportProgress(Math.round(fake))
+    }, 350)
+
     try {
       const formData = new FormData()
       formData.append('file', importFile)
       formData.append('importedBy', 'admin')
       const res = await fetch('/api/drivers/import', { method: 'POST', body: formData })
       const result: ImportResult = await res.json()
+      if (importTimerRef.current) clearInterval(importTimerRef.current)
+      setImportProgress(100)
       setImportResult(result)
       if (result.successRows > 0) await loadDrivers()
     } finally {
+      if (importTimerRef.current) clearInterval(importTimerRef.current)
       setImporting(false)
     }
   }
 
   const handleImportDialogClose = () => {
+    if (importing) return
     setImportDialogOpen(false)
     setImportFile(null)
     setImportResult(null)
+    setImportProgress(0)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  const handleImportDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
+      setImportFile(file)
+      setImportResult(null)
+    }
+  }
+
   return (
-    <div className="p-6">
+    <div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">司机管理</h1>
           <p className="text-muted-foreground">管理司机档案和状态</p>
         </div>
         <div className="flex items-center gap-2">
+          {batchMode ? (
+            <>
+              {selectedIds.size > 0 && (
+                <Button variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  删除选中 ({selectedIds.size})
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => { setBatchMode(false); setSelectedIds(new Set()) }}>
+                取消
+              </Button>
+            </>
+          ) : (
+            <Button variant="outline" onClick={() => setBatchMode(true)}>
+              <Trash2 className="w-4 h-4 mr-2" />
+              批量删除
+            </Button>
+          )}
+          <Button variant="outline" onClick={handleSetAllFree}>
+            一键全部空闲
+          </Button>
           <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
             <Upload className="w-4 h-4 mr-2" />
             导入 Excel
@@ -222,8 +355,13 @@ export default function DriversPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部车型</SelectItem>
-                {Object.entries(VEHICLE_TYPE_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                {VEHICLE_TYPE_OPTIONS.map(t => (
+                  <SelectItem key={t} value={t}>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[t]}`} />
+                      {t}
+                    </div>
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -242,10 +380,32 @@ export default function DriversPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border/50">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">司机信息</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">车辆信息</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">今日工作量</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-muted-foreground">状态</th>
+                  <th className="py-3 px-4 w-[40px]">
+                    <Checkbox
+                      checked={filteredDrivers.length > 0 && selectedIds.size === filteredDrivers.length}
+                      onCheckedChange={toggleSelectAll}
+                      className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                    />
+                  </th>
+                  {(
+                    [
+                      { label: '司机信息', field: 'name' },
+                      { label: '车牌号',   field: 'vehiclePlate' },
+                      { label: '车型',     field: 'vehicleType' },
+                      { label: '工作时间', field: 'workingHours' },
+                      { label: '状态',     field: 'status' },
+                    ] as { label: string; field: SortField }[]
+                  ).map(col => (
+                    <th key={col.field} className="text-left py-3 px-4">
+                      <button
+                        onClick={() => handleSort(col.field)}
+                        className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {col.label}
+                        <SortIcon field={col.field} sortField={sortField} sortDir={sortDir} />
+                      </button>
+                    </th>
+                  ))}
                   <th className="text-right py-3 px-4 text-sm font-medium text-muted-foreground">操作</th>
                 </tr>
               </thead>
@@ -255,6 +415,13 @@ export default function DriversPage() {
                     key={driver.id}
                     className="border-b border-border/30 hover:bg-muted/30 transition-colors"
                   >
+                    <td className="py-3 px-4">
+                      <Checkbox
+                        checked={selectedIds.has(driver.id)}
+                        onCheckedChange={() => toggleSelect(driver.id)}
+                        className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                      />
+                    </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-medium">
@@ -271,29 +438,37 @@ export default function DriversPage() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        <Car className="w-4 h-4 text-muted-foreground" />
-                        <div>
-                          <p className="text-foreground">{driver.vehiclePlate}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {VEHICLE_TYPE_LABELS[driver.vehicleType]}
-                          </p>
-                        </div>
+                        <Car className="w-4 h-4 text-muted-foreground shrink-0" />
+                        <span className="font-mono text-sm text-foreground">{driver.vehiclePlate}</span>
                       </div>
                     </td>
                     <td className="py-3 px-4">
-                      <div className="flex items-center gap-2">
-                        <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary rounded-full transition-all"
-                            style={{
-                              width: `${Math.min((driver.dailyOrderCount / driver.dailyOrderLimit) * 100, 100)}%`,
-                            }}
-                          />
-                        </div>
-                        <span className="text-sm text-muted-foreground">
-                          {driver.dailyOrderCount}/{driver.dailyOrderLimit}
-                        </span>
-                      </div>
+                      <Select
+                        value={driver.vehicleType === "商务型" ? "普通商务型" : driver.vehicleType}
+                        onValueChange={(value) => handleVehicleTypeChange(driver.id, value as VehicleType)}
+                      >
+                        <SelectTrigger className="h-7 text-xs w-[120px] border border-muted-foreground/30">
+                          <div className="flex items-center gap-1.5 overflow-hidden">
+                            <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[(driver.vehicleType === "商务型" ? "普通商务型" : driver.vehicleType) as keyof typeof VEHICLE_TYPE_COLORS] ?? 'bg-muted'}`} />
+                            <span className="truncate">{driver.vehicleType === "商务型" ? "普通商务型" : driver.vehicleType}</span>
+                          </div>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {VEHICLE_TYPE_OPTIONS.map(t => (
+                            <SelectItem key={t} value={t} className="text-xs">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[t]}`} />
+                                {t}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="text-sm text-foreground font-mono">
+                        {driver.workingHours || '—'}
+                      </span>
                     </td>
                     <td className="py-3 px-4">
                       <Select
@@ -347,7 +522,7 @@ export default function DriversPage() {
                 ))}
                 {filteredDrivers.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="py-12 text-center text-muted-foreground">
+                    <td colSpan={7} className="py-12 text-center text-muted-foreground">
                       暂无数据
                     </td>
                   </tr>
@@ -359,110 +534,144 @@ export default function DriversPage() {
       </Card>
 
       {/* xlsx 导入对话框 */}
-      <Dialog open={importDialogOpen} onOpenChange={handleImportDialogClose}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={importDialogOpen} onOpenChange={o => { if (!o) handleImportDialogClose() }}>
+        <DialogContent
+          className="max-w-lg"
+          onEscapeKeyDown={e => { if (importing) e.preventDefault() }}
+          onPointerDownOutside={e => { if (importing) e.preventDefault() }}
+        >
           <DialogHeader>
-            <DialogTitle>导入司机 Excel</DialogTitle>
-            <DialogDescription>
-              支持 .xlsx / .xls 格式，首行为表头
-            </DialogDescription>
+            <DialogTitle>导入司机</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* 格式说明 */}
-            <div className="rounded-md border border-border/50 bg-muted/30 p-3 text-sm">
-              <p className="font-medium mb-2">必填列（表头名称）：</p>
-              <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
-                <span>• 司机</span>
-                <span>• 司机电话</span>
-                <span>• 车型（舒适型/豪华型/商务型/经济型）</span>
-                <span>• 车号</span>
-              </div>
-              <p className="font-medium mt-2 mb-1">可选列：</p>
-              <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
-                <span>• 住（常驻区域）</span>
-                <span>• 班次</span>
-                <span>• 做单时间</span>
-                <span>• 日单上限（默认 10）</span>
-              </div>
-            </div>
-
-            {/* 上传区 */}
-            {!importResult ? (
-              <div
-                className="border-2 border-dashed border-border/50 rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  className="hidden"
-                  onChange={handleFileSelect}
-                />
-                {importFile ? (
-                  <div className="flex items-center justify-center gap-2">
-                    <FileSpreadsheet className="w-6 h-6 text-primary" />
-                    <span className="font-medium">{importFile.name}</span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setImportFile(null) }}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <Upload className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">点击选择文件或拖放到此处</p>
-                    <p className="text-xs text-muted-foreground mt-1">.xlsx / .xls</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* 导入结果 */
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 rounded-md bg-green-500/10 border border-green-500/20 p-3">
-                  <CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" />
-                  <span className="text-sm">成功导入 <strong>{importResult.successRows}</strong> 条记录</span>
+            {/* ── 导入中 ── */}
+            {importing && (
+              <div className="flex flex-col items-center justify-center gap-4 py-10">
+                <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                <p className="text-sm text-muted-foreground">正在导入并地理编码，请勿关闭…</p>
+                <div className="w-full max-w-sm">
+                  <Progress value={importProgress} className="h-2" />
+                  <p className="text-xs text-right text-muted-foreground mt-1">{importProgress}%</p>
                 </div>
-                {importResult.detectedHeaders && importResult.detectedHeaders.length > 0 && (
-                  <div className="rounded-md bg-muted/30 border border-border/50 p-3">
-                    <p className="text-xs font-medium mb-1">检测到的列名（共 {importResult.detectedHeaders.length} 列）：</p>
-                    <p className="text-xs text-muted-foreground break-all">{importResult.detectedHeaders.join(" | ")}</p>
+                <p className="text-xs text-muted-foreground/60">导入过程中请勿关闭或刷新页面</p>
+              </div>
+            )}
+
+            {/* ── 完成 ── */}
+            {!importing && importResult && (
+              <div className="space-y-3 py-2">
+                <div className="flex items-center gap-3 rounded-md bg-primary/10 border border-primary/20 p-4">
+                  <CheckCircle2 className="h-6 w-6 text-primary shrink-0" />
+                  <div>
+                    <p className="font-medium">导入完成</p>
+                    <p className="text-sm text-muted-foreground">
+                      成功 <strong>{importResult.successRows}</strong> 条
+                      {importResult.errorRows > 0 && `，失败 ${importResult.errorRows} 条`}
+                    </p>
                   </div>
-                )}
+                </div>
                 {importResult.errorRows > 0 && (
                   <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3">
                     <div className="flex items-center gap-2 mb-2">
                       <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
-                      <span className="text-sm font-medium text-destructive">{importResult.errorRows} 条失败</span>
+                      <span className="text-sm font-medium text-destructive">{importResult.errorRows} 条有错误</span>
                     </div>
                     <ul className="text-xs text-muted-foreground space-y-1 max-h-32 overflow-y-auto">
                       {importResult.errors.map((e, i) => (
-                        <li key={i}>
-                          {e.row > 0 ? `第 ${e.row} 行` : ''} [{e.field}] {e.message}
-                        </li>
+                        <li key={i}>{e.row > 0 ? `第 ${e.row} 行` : ''} [{e.field}] {e.message}</li>
                       ))}
                     </ul>
                   </div>
                 )}
               </div>
             )}
+
+            {/* ── 文件选择 ── */}
+            {!importing && !importResult && (
+              <>
+                {/* 格式说明 */}
+                <div className="rounded-md border border-border/50 bg-muted/30 p-3 text-sm">
+                  <p className="font-medium mb-1 text-xs">必填列：</p>
+                  <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
+                    <span>• 司机</span><span>• 司机电话</span>
+                    <span>• 车型（豪华商务/普通商务/豪华/舒适/经济型，商务型自动转普通商务型）</span><span>• 车号</span>
+                    <span>• 时间（如 05:00-18:00）</span>
+                  </div>
+                  <p className="font-medium mt-2 mb-1 text-xs">可选列：</p>
+                  <div className="grid grid-cols-2 gap-1 text-muted-foreground text-xs">
+                    <span>• 住（常驻区域）</span><span>• 班次</span>
+                  </div>
+                </div>
+
+                {/* 拖放区 */}
+                <div
+                  className="border-2 border-dashed border-border/50 rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                  onDrop={handleImportDrop}
+                  onDragOver={e => e.preventDefault()}
+                  onDragEnter={e => e.preventDefault()}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+                  {importFile ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <FileSpreadsheet className="h-5 w-5 text-primary" />
+                      <span className="font-medium text-sm">{importFile.name}</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); setImportFile(null) }}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground">点击或拖拽 .xlsx / .xls 文件到此处</p>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={handleImportDialogClose}>
+            <Button variant="outline" onClick={handleImportDialogClose} disabled={importing}>
               {importResult ? '关闭' : '取消'}
             </Button>
-            {!importResult && (
-              <Button onClick={handleImport} disabled={!importFile || importing}>
-                {importing ? '导入中...' : '开始导入'}
+            {!importResult && !importing && (
+              <Button onClick={handleImport} disabled={!importFile}>
+                <Upload className="mr-2 h-4 w-4" />
+                开始导入
               </Button>
             )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 批量删除确认 */}
+      <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除确认</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除选中的 {selectedIds.size} 名司机吗？此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBatchDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 删除确认对话框 */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

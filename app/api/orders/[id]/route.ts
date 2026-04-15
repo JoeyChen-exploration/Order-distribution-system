@@ -20,6 +20,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 // DELETE /api/orders/:id
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  await db.order.delete({ where: { id } })
-  return NextResponse.json({ success: true })
+  try {
+    await db.order.delete({ where: { id } })
+    return NextResponse.json({ success: true })
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
 }

@@ -9,7 +9,9 @@ export async function getDrivers(params?: { status?: string; vehicleType?: strin
   if (params?.status) query.set('status', params.status)
   if (params?.vehicleType) query.set('vehicleType', params.vehicleType)
   const res = await fetch(`/api/drivers?${query}`)
-  return res.json()
+  if (!res.ok) return []
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
 }
 
 export async function getDriverById(id: string): Promise<Driver | null> {
@@ -94,6 +96,15 @@ export async function assignOrder(orderId: string, driverId: string, userId: str
   })
 
   return order
+}
+
+export async function deleteOrder(id: string): Promise<void> {
+  await fetch(`/api/orders/${id}`, { method: 'DELETE' })
+}
+
+/** 撤销派单：将订单状态重置为待排单，清空司机信息 */
+export async function cancelDispatch(orderId: string): Promise<Order> {
+  return updateOrder(orderId, { status: 0, driverId: null, driverName: null })
 }
 
 export async function cancelOrder(orderId: string, reason: string): Promise<Order | null> {

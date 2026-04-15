@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
+import * as XLSX from "xlsx"
 import {
   Upload,
   FileSpreadsheet,
@@ -27,6 +28,28 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { createOrder } from "@/lib/store"
 
+const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
+
+function extractCity(address: string): string {
+  const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
+  return m ? m[0].replace(/省|区|县/, "市") : "上海"
+}
+
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
+  if (!address) return { lat: 0, lng: 0 }
+  try {
+    const city = extractCity(address)
+    const res = await fetch(
+      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=${encodeURIComponent(city)}`
+    )
+    const data = await res.json()
+    if (data.status === "1" && data.geocodes?.length > 0) {
+      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
+      return { lat, lng }
+    }
+  } catch {}
+  return { lat: 0, lng: 0 }
+}
 
 interface ParsedRow {
   rowIndex: number
@@ -41,7 +64,6 @@ const fieldMapping: Record<string, string> = {
   // 核心订单字段
   "订单号": "orderNo",
   "预订车型": "reqVehicleType",
-  "服务类型": "serviceType",
   "服务城市": "serviceCity",
   "服务日期": "flightDate",
   "三字码": "airportCode",
@@ -65,6 +87,8 @@ const fieldMapping: Record<string, string> = {
   "婴儿床费用": "babyBedFee",
   "儿童座椅费用": "childSeatFee",
   "单程费": "singleTripFee",
+  "举牌费": "signFee",
+  "举牌服务": "signService",
   "上下车点": "pickupDropoffPoint",
   "节假日调价": "holidayAdjustment",
   "自主调价": "selfAdjustment",
@@ -76,11 +100,12 @@ const fieldMapping: Record<string, string> = {
 }
 
 const vehicleTypeMapping: Record<string, string> = {
-  // 标准名称直接保留
   "舒适型": "舒适型",
   "豪华型": "豪华型",
-  "商务型": "商务型",
   "经济型": "经济型",
+  "豪华商务型": "豪华商务型",
+  "普通商务型": "普通商务型",
+  "商务型": "普通商务型",
 }
 
 export default function OrderImportPage() {
@@ -90,22 +115,6 @@ export default function OrderImportPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [importProgress, setImportProgress] = useState(0)
   const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null)
-
-  const parseCSV = (text: string): string[][] => {
-    const lines = text.split(/\r?\n/).filter(l => l.trim())
-    return lines.map(line => {
-      const result: string[] = []
-      let current = ""
-      let inQuotes = false
-      for (const char of line) {
-        if (char === '"') { inQuotes = !inQuotes }
-        else if (char === "," && !inQuotes) { result.push(current.trim()); current = "" }
-        else { current += char }
-      }
-      result.push(current.trim())
-      return result
-    })
-  }
 
   const validateRow = (data: Record<string, string | number | boolean>, rowIndex: number): ParsedRow => {
     const errors: string[] = []
@@ -119,8 +128,8 @@ export default function OrderImportPage() {
     if (data.flightDate && !/^\d{4}-\d{2}-\d{2}/.test(String(data.flightDate))) {
       errors.push("服务日期格式不正确，应为 YYYY-MM-DD")
     }
-    if (data.reqVehicleType && !["舒适型", "豪华型", "商务型", "经济型"].includes(String(data.reqVehicleType))) {
-      errors.push(`车型无效："${data.reqVehicleType}"，应为 舒适型/豪华型/商务型/经济型`)
+    if (data.reqVehicleType && !["舒适型", "豪华型", "豪华商务型", "普通商务型", "经济型"].includes(String(data.reqVehicleType))) {
+      errors.push(`车型无效："${data.reqVehicleType}"，应为 舒适型/豪华型/豪华商务型/普通商务型/经济型`)
     }
 
     return { rowIndex, data, errors, isValid: errors.length === 0 }
@@ -130,29 +139,53 @@ export default function OrderImportPage() {
     setIsProcessing(true)
     setImportResult(null)
     try {
-      const text = await f.text()
-      const rows = parseCSV(text)
+      const buffer = await f.arrayBuffer()
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      // header: 1 返回二维数组
+      const rows: (string | number | boolean | Date)[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+
       if (rows.length < 2) throw new Error("文件内容不足")
 
-      const headers = rows[0]
+      const headers = rows[0].map(h => String(h).trim())
       const mappedHeaders = headers.map(h => fieldMapping[h] || h)
 
       const parsed: ParsedRow[] = []
       for (let i = 1; i < rows.length; i++) {
         const row = rows[i]
         // Skip completely empty rows
-        if (row.every(cell => !cell.trim())) continue
+        if (row.every(cell => String(cell).trim() === "")) continue
 
         const data: Record<string, string | number | boolean> = {}
         mappedHeaders.forEach((header, idx) => {
-          let value = row[idx]?.trim() || ""
-          if (header === "reqVehicleType") value = vehicleTypeMapping[value] || value
+          const raw = row[idx]
+          let value: string
+          if (raw instanceof Date) {
+            // 转为中国时间 (UTC+8)
+            const cst = new Date(raw.getTime() + 8 * 60 * 60 * 1000)
+            const pad = (n: number) => String(n).padStart(2, "0")
+            const dateStr = `${cst.getUTCFullYear()}-${pad(cst.getUTCMonth() + 1)}-${pad(cst.getUTCDate())}`
+            const timeStr = `${pad(cst.getUTCHours())}:${pad(cst.getUTCMinutes())}`
+            value = `${dateStr} ${timeStr}`
+          } else {
+            value = String(raw ?? "").trim()
+          }
+          if (header === "reqVehicleType") {
+            if (value === "商务型") data["原车型"] = "商务型"
+            value = vehicleTypeMapping[value] || value
+          }
           if (value) data[header] = value
         })
 
-        // Normalize flightDate: take only date part if datetime is given
+        // 从"服务日期"（含日期和时间，如 "2026-03-06 00:15"）中拆分出 flightDate 和 pickupTime
         if (data.flightDate) {
-          data.flightDate = String(data.flightDate).slice(0, 10)
+          const dateTimeStr = String(data.flightDate)
+          const parts = dateTimeStr.split(/[\sT]/)
+          data.flightDate = parts[0]  // YYYY-MM-DD
+          // 如果 pickupTime 未单独映射，从日期时间字段中提取
+          if (parts[1] && !data.pickupTime) {
+            data.pickupTime = parts[1].slice(0, 5)  // HH:MM
+          }
         }
 
         parsed.push(validateRow(data, i))
@@ -187,9 +220,29 @@ export default function OrderImportPage() {
     let success = 0
     let failed = 0
 
+    const CORE_FIELDS = new Set([
+      "orderNo", "reqVehicleType", "flightDate", "flightNo",
+      "pickupAddress", "dropoffAddress", "driverName",
+      "passengerName", "passengerPhone", "pickupTime", "isEmergency",
+    ])
+
     for (let i = 0; i < valid.length; i++) {
       try {
         const d = valid[i].data
+        // collect extra xlsx fields into metadata
+        const extra: Record<string, string> = {}
+        for (const [k, v] of Object.entries(d)) {
+          if (!CORE_FIELDS.has(k) && v !== "" && v !== undefined && v !== false) {
+            extra[k] = String(v)
+          }
+        }
+        // 并发地理编码上下车点
+        const pickupAddr = String(d.pickupAddress || "")
+        const dropoffAddr = String(d.dropoffAddress || "")
+        const [pickupCoord, dropoffCoord] = await Promise.all([
+          geocodeAddress(pickupAddr),
+          geocodeAddress(dropoffAddr),
+        ])
         await createOrder({
           orderNo: String(d.orderNo || `IMP-${Date.now()}-${i}`),
           passengerName: String(d.passengerName || ""),
@@ -197,24 +250,24 @@ export default function OrderImportPage() {
           flightNo: String(d.flightNo || ""),
           flightDate: String(d.flightDate || ""),
           pickupTime: String(d.pickupTime || ""),
-          pickupAddress: String(d.pickupAddress || ""),
-          pickupLat: 0,
-          pickupLng: 0,
-          dropoffAddress: String(d.dropoffAddress || ""),
-          dropoffLat: 0,
-          dropoffLng: 0,
+          pickupAddress: pickupAddr,
+          pickupLat: pickupCoord.lat,
+          pickupLng: pickupCoord.lng,
+          dropoffAddress: dropoffAddr,
+          dropoffLat: dropoffCoord.lat,
+          dropoffLng: dropoffCoord.lng,
           reqVehicleType: String(d.reqVehicleType || "舒适型") as "舒适型" | "豪华型" | "商务型" | "经济型",
           status: 0,
           driverName: d.driverName ? String(d.driverName) : undefined,
           isEmergency: Boolean(d.isEmergency),
           importBatchId: null,
+          metadata: Object.keys(extra).length > 0 ? JSON.stringify(extra) : undefined,
         })
         success++
       } catch {
         failed++
       }
       setImportProgress(Math.round(((i + 1) / valid.length) * 100))
-      await new Promise(r => setTimeout(r, 30))
     }
 
     setImportResult({ success, failed })
@@ -287,9 +340,10 @@ export default function OrderImportPage() {
             className="border-2 border-dashed rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer"
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
+            onDragEnter={(e) => e.preventDefault()}
             onClick={() => document.getElementById("file-input")?.click()}
           >
-            <input id="file-input" type="file" accept=".csv" className="hidden" onChange={handleFileChange} />
+            <input id="file-input" type="file" accept=".csv,.xlsx" className="hidden" onChange={handleFileChange} />
             {file ? (
               <div className="flex items-center justify-center gap-3">
                 <FileSpreadsheet className="h-10 w-10 text-primary" />

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import React, { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -15,8 +15,14 @@ import {
   Car,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   X,
   RefreshCw,
+  Trash2,
+  CalendarIcon,
+  Download,
+  Ban,
+  Loader2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -44,8 +50,26 @@ import {
 } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { getOrders, getDrivers, updateOrder } from "@/lib/store"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { format } from "date-fns"
+import { zhCN } from "date-fns/locale"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { getOrders, getDrivers, updateOrder, updateDriver, cancelDispatch } from "@/lib/store"
 import type { Order, OrderStatus } from "@/lib/types"
+import { VEHICLE_TYPE_OPTIONS, VEHICLE_TYPE_COLORS } from "@/lib/types"
+import { OrderImportDialog } from "@/components/order-import-dialog"
 
 const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   0: { label: "待排单", variant: "secondary" },
@@ -56,12 +80,67 @@ const statusConfig: Record<OrderStatus, { label: string; variant: "default" | "s
   5: { label: "空单", variant: "outline" },
 }
 
-const vehicleTypeLabels: Record<string, string> = {
-  "舒适型": "舒适型",
-  "豪华型": "豪华型",
-  "商务型": "商务型",
-  "经济型": "经济型",
+const serviceTypeConfig: Record<string, { border: string; text: string; bg: string }> = {
+  "接机/站": { border: "border-sky-500",     text: "text-sky-400",     bg: "bg-sky-500/10" },
+  "送机/站": { border: "border-amber-500",   text: "text-amber-400",   bg: "bg-amber-500/10" },
+  "包车":    { border: "border-emerald-500", text: "text-emerald-400", bg: "bg-emerald-500/10" },
+  "市内约车": { border: "border-violet-500",  text: "text-violet-400",  bg: "bg-violet-500/10" },
 }
+
+function ServiceTypeBadge({ value, charterHours }: { value: string; charterHours?: string }) {
+  const cfg = serviceTypeConfig[value]
+  const needsCharterConfirm = value === "包车" && !charterHours
+  if (!cfg) return <span className="text-xs text-muted-foreground">{value || "-"}</span>
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[11px] font-medium w-fit ${cfg.border} ${cfg.text} ${cfg.bg}`}>
+        {value}{charterHours ? `·${charterHours}h` : ""}
+      </span>
+      {needsCharterConfirm && (
+        <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/20 text-orange-400 w-fit">
+          待确认时长
+        </span>
+      )}
+    </div>
+  )
+}
+
+type FlightStatusType = "on_time" | "delayed" | "cancelled" | "landed" | "unknown"
+interface FlightStatus { status: FlightStatusType; message: string; delayMinutes: number }
+
+function FlightStatusBadge({ fs }: { fs: FlightStatus }) {
+  if (fs.status === "on_time")   return <span className="text-[10px] px-1 py-0.5 rounded bg-green-500/15 text-green-400">正常</span>
+  if (fs.status === "delayed")   return <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400">延误{fs.delayMinutes}分</span>
+  if (fs.status === "cancelled") return <span className="text-[10px] px-1 py-0.5 rounded bg-red-500/15 text-red-400">取消</span>
+  if (fs.status === "landed")    return <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400">已落地</span>
+  return null
+}
+
+const METADATA_LABELS: Record<string, string> = {
+  serviceType: "服务类型", serviceCity: "服务城市", airportCode: "三字码",
+  passengerCount: "人数", submittedAt: "下单时间",
+  vehiclePlate: "车号", driverPhone: "司机电话", driverGroup: "司机分组",
+  actualVehicleType: "实际车型", tripNo: "架次",
+  kilometers: "公里数", currency: "货币", singleTripFee: "单程费", signFee: "举牌费",
+  extraKmFee: "超公里费", nightFee: "夜间服务费", babyBedFee: "婴儿座椅费",
+  childSeatFee: "儿童座椅费", holidayAdjustment: "节假日调价", selfAdjustment: "自主调价",
+  pickupDropoffPoint: "上下车点费", supplierOrderNo: "供应商订单",
+  serviceStandard: "服务标准", signService: "举牌服务", singleService: "单程服务", remarks: "备注",
+}
+
+// 费用明细中始终展示的字段（无值显示0）
+const FEE_ALWAYS_SHOW = new Set([
+  "kilometers", "currency", "singleTripFee", "signFee", "extraKmFee",
+  "nightFee", "babyBedFee", "childSeatFee", "holidayAdjustment", "selfAdjustment",
+  "pickupDropoffPoint", "supplierOrderNo",
+])
+
+const METADATA_GROUPS = [
+  { label: "基本信息", keys: ["serviceCity", "airportCode", "submittedAt"] },
+  { label: "费用明细", keys: ["kilometers", "currency", "singleTripFee", "signFee", "extraKmFee", "nightFee", "babyBedFee", "childSeatFee", "holidayAdjustment", "selfAdjustment", "pickupDropoffPoint", "supplierOrderNo"] },
+  { label: "司机/车辆", keys: ["vehiclePlate", "driverPhone", "driverGroup", "actualVehicleType", "tripNo"] },
+  { label: "其他", keys: ["signService", "singleService", "remarks"] },
+]
 
 export default function OrdersPage() {
   const router = useRouter()
@@ -69,9 +148,18 @@ export default function OrdersPage() {
   const [drivers, setDrivers] = useState<{ id: string; name: string }[]>([])
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [dateFilter, setDateFilter] = useState("")
+  const [vehicleFilter, setVehicleFilter] = useState<string>("all")
+  const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined)
   const [currentPage, setCurrentPage] = useState(1)
-  const pageSize = 10
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null)
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
+  const [cancelAllOpen, setCancelAllOpen] = useState(false)
+  const [flightStatuses, setFlightStatuses] = useState<Map<string, FlightStatus>>(new Map())
+  const [loadingFlights, setLoadingFlights] = useState(false)
+  const pageSize = 50
 
   useEffect(() => {
     async function load() {
@@ -83,19 +171,26 @@ export default function OrdersPage() {
   }, [])
 
   const filteredOrders = useMemo(() => {
-    return orders.filter(order => {
-      const matchesSearch =
-        order.orderNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        order.passengerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        order.passengerPhone.includes(searchQuery) ||
-        (order.flightNo && order.flightNo.toLowerCase().includes(searchQuery.toLowerCase()))
+    const dateStr = dateFilter ? format(dateFilter, "yyyy-MM-dd") : ""
+    return orders
+      .filter(order => {
+        const q = searchQuery.toLowerCase()
+        const matchesSearch = !q ||
+          order.orderNo.toLowerCase().includes(q) ||
+          (order.flightNo && order.flightNo.toLowerCase().includes(q))
 
-      const matchesStatus = statusFilter === "all" || order.status === Number(statusFilter)
-      const matchesDate = !dateFilter || order.flightDate === dateFilter
+        const matchesStatus = statusFilter === "all" || order.status === Number(statusFilter)
+        const matchesVehicle = vehicleFilter === "all" || order.reqVehicleType === vehicleFilter
+        const matchesDate = !dateStr || order.flightDate === dateStr
 
-      return matchesSearch && matchesStatus && matchesDate
-    })
-  }, [orders, searchQuery, statusFilter, dateFilter])
+        return matchesSearch && matchesStatus && matchesVehicle && matchesDate
+      })
+      .sort((a, b) => {
+        const dtA = `${a.flightDate} ${a.pickupTime || "00:00"}`
+        const dtB = `${b.flightDate} ${b.pickupTime || "00:00"}`
+        return dtA.localeCompare(dtB)
+      })
+  }, [orders, searchQuery, statusFilter, vehicleFilter, dateFilter])
 
   const paginatedOrders = useMemo(() => {
     const start = (currentPage - 1) * pageSize
@@ -126,14 +221,144 @@ export default function OrdersPage() {
     setOrders(await getOrders())
   }
 
+  const handleVehicleTypeChange = async (orderId: string, newType: string) => {
+    await updateOrder(orderId, { reqVehicleType: newType })
+    setOrders(await getOrders())
+  }
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    // 全选/取消全选所有筛选结果（跨页），方便大批量删除
+    if (selectedIds.size === filteredOrders.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredOrders.map(o => o.id)))
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    await fetch('/api/orders/batch-delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: Array.from(selectedIds) }),
+    })
+    setSelectedIds(new Set())
+    setBatchDeleteOpen(false)
+    setBatchMode(false)
+    setOrders(await getOrders())
+  }
+
+  const handleCancelDispatch = async (orderId: string) => {
+    await cancelDispatch(orderId)
+    setOrders(await getOrders())
+  }
+
+  const handleCancelAllDispatches = async () => {
+    const toCancel = orders.filter(o => o.status === 1)
+    // collect unique driverIds before clearing
+    const affectedDriverIds = [...new Set(toCancel.map(o => o.driverId).filter(Boolean) as string[])]
+    await Promise.all(toCancel.map(o => cancelDispatch(o.id)))
+    // reset affected drivers back to available
+    await Promise.all(affectedDriverIds.map(id => updateDriver(id, { status: "available" })))
+    setOrders(await getOrders())
+    setCancelAllOpen(false)
+  }
+
+  const handleSetCharterHours = async (orderId: string, hours: 4 | 8, currentMeta: string) => {
+    const meta = currentMeta ? JSON.parse(currentMeta) : {}
+    meta["包车时长"] = String(hours)
+    await updateOrder(orderId, { metadata: JSON.stringify(meta) })
+    setOrders(await getOrders())
+  }
+
+
+  const refreshFlightStatuses = async () => {
+    setLoadingFlights(true)
+    const keys = new Set(
+      filteredOrders
+        .filter(o => o.flightNo)
+        .map(o => `${o.flightNo}|${o.flightDate}`)
+    )
+    const newStatuses = new Map(flightStatuses)
+    await Promise.all(
+      Array.from(keys).map(async key => {
+        const [flightNo, date] = key.split("|")
+        try {
+          const res = await fetch(`/api/flights/status?flightNo=${encodeURIComponent(flightNo)}&date=${date}`)
+          const data = await res.json()
+          newStatuses.set(key, data)
+        } catch {}
+      })
+    )
+    setFlightStatuses(new Map(newStatuses))
+    setLoadingFlights(false)
+  }
+
+  const handleExport = async () => {
+    const XLSX = await import("xlsx")
+    const dispatched = orders
+      .slice()
+      .sort((a, b) => `${a.flightDate} ${a.pickupTime}`.localeCompare(`${b.flightDate} ${b.pickupTime}`))
+    const allDrivers = await getDrivers()
+
+    const headers = [
+      "订单号","预订车型","服务类型","服务城市","服务日期","三字码","人数","下单时间",
+      "航班号","上车点","下车点","车号","司机","司机电话","司机分组","实际车型",
+      "架次","公里数","服务标准","举牌服务","备注",
+    ]
+    const rows = dispatched.map(order => {
+      const meta: Record<string, string> = order.metadata ? JSON.parse(order.metadata) : {}
+      const driver = allDrivers.find(d => d.id === order.driverId)
+      const serviceDate = order.flightDate && order.pickupTime
+        ? `${order.flightDate} ${order.pickupTime}:00`
+        : order.flightDate || ""
+      return [
+        order.orderNo,
+        order.reqVehicleType,
+        meta["服务类型"] || meta["serviceType"] || "",
+        meta["serviceCity"] || "",
+        serviceDate,
+        meta["airportCode"] || "",
+        meta["passengerCount"] || "",
+        meta["submittedAt"] || "",
+        order.flightNo || "",
+        order.pickupAddress || "",
+        order.dropoffAddress || "",
+        meta["vehiclePlate"] || driver?.vehiclePlate || "",
+        order.driverName || driver?.name || "",
+        meta["driverPhone"] || driver?.phone || "",
+        meta["driverGroup"] || "",
+        meta["actualVehicleType"] || order.reqVehicleType || "",
+        meta["tripNo"] || "",
+        meta["kilometers"] || "",
+        meta["serviceStandard"] || "",
+        meta["signService"] || "",
+        meta["remarks"] || "",
+      ]
+    })
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, "礼宾车账单")
+    XLSX.writeFile(wb, `排单结果_${format(new Date(), "yyyyMMdd")}.xlsx`)
+  }
+
   const clearFilters = () => {
     setSearchQuery("")
     setStatusFilter("all")
-    setDateFilter("")
+    setVehicleFilter("all")
+    setDateFilter(undefined)
     setCurrentPage(1)
   }
 
-  const hasActiveFilters = searchQuery || statusFilter !== "all" || dateFilter
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || vehicleFilter !== "all" || dateFilter
 
   return (
     <div className="flex flex-col gap-6">
@@ -143,11 +368,41 @@ export default function OrdersPage() {
           <p className="text-muted-foreground">管理所有接送机订单</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" asChild>
-            <Link href="/orders/import">
-              <Upload className="mr-2 h-4 w-4" />
-              导入订单
-            </Link>
+          {batchMode ? (
+            <>
+              {selectedIds.size > 0 && (
+                <Button variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  删除选中 ({selectedIds.size})
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => { setBatchMode(false); setSelectedIds(new Set()) }}>
+                取消
+              </Button>
+            </>
+          ) : (
+            <Button variant="outline" onClick={() => setBatchMode(true)}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              批量删除
+            </Button>
+          )}
+          {orders.some(o => o.status === 1) && (
+            <Button variant="outline" onClick={() => setCancelAllOpen(true)}>
+              <Ban className="mr-2 h-4 w-4" />
+              取消全部派单
+            </Button>
+          )}
+          <Button variant="outline" onClick={refreshFlightStatuses} disabled={loadingFlights}>
+            {loadingFlights ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            刷新航班
+          </Button>
+          <Button variant="outline" onClick={handleExport}>
+            <Download className="mr-2 h-4 w-4" />
+            导出排单
+          </Button>
+          <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            导入订单
           </Button>
           <Button asChild>
             <Link href="/orders/create">
@@ -198,6 +453,47 @@ export default function OrdersPage() {
         </Card>
       </div>
 
+      {/* Charter hours warning */}
+      {(() => {
+        const pending = orders.filter(o => {
+          const m = o.metadata ? JSON.parse(o.metadata) : {}
+          return (m["服务类型"] === "包车" || m.serviceType === "包车") && !m["包车时长"]
+        })
+        if (pending.length === 0) return null
+        return (
+          <div className="flex flex-wrap items-start gap-2 rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-3">
+            <span className="text-orange-400 text-sm font-medium shrink-0">⚠ 以下包车订单未选择时长，无法参与派单：</span>
+            <div className="flex flex-wrap gap-2">
+              {pending.map(o => (
+                <button
+                  key={o.id}
+                  onClick={() => { setSearchQuery(o.orderNo); setCurrentPage(1) }}
+                  className="text-xs px-2 py-0.5 rounded border border-orange-500/50 text-orange-300 hover:bg-orange-500/20 transition-colors font-mono"
+                >
+                  {o.orderNo}
+                </button>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Upgrade reminder: orders auto-converted from 商务型 → 普通商务型 */}
+      {(() => {
+        const upgradeable = orders.filter(o => {
+          if (o.reqVehicleType !== "普通商务型") return false
+          try { const m = JSON.parse(o.metadata || "{}"); return m["原车型"] === "商务型" } catch { return false }
+        })
+        if (upgradeable.length === 0) return null
+        return (
+          <div className="rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-3">
+            <span className="text-blue-400 text-sm font-medium">
+              ℹ {upgradeable.length} 条订单已从商务型自动归入普通商务型，如需升级为豪华商务型请在订单中操作
+            </span>
+          </div>
+        )
+      })()}
+
       {/* Filters */}
       <Card>
         <CardContent className="pt-6">
@@ -205,7 +501,7 @@ export default function OrdersPage() {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="搜索订单号、乘客姓名、电话、航班号..."
+                placeholder="搜索订单号、航班号..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9"
@@ -213,7 +509,7 @@ export default function OrdersPage() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[130px]">
+                <SelectTrigger className="w-[120px]">
                   <SelectValue placeholder="订单状态" />
                 </SelectTrigger>
                 <SelectContent>
@@ -223,12 +519,42 @@ export default function OrdersPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Input
-                type="date"
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-                className="w-[160px]"
-              />
+              <Select value={vehicleFilter} onValueChange={setVehicleFilter}>
+                <SelectTrigger className="w-[110px]">
+                  <SelectValue placeholder="车型" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">全部车型</SelectItem>
+                  {VEHICLE_TYPE_OPTIONS.map(type => (
+                    <SelectItem key={type} value={type}>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[type]}`} />
+                        {type}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn("w-[150px] justify-start text-left font-normal", !dateFilter && "text-muted-foreground")}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateFilter ? format(dateFilter, "yyyy-MM-dd") : "选择日期"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={dateFilter}
+                    onSelect={setDateFilter}
+                    locale={zhCN}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
               {hasActiveFilters && (
                 <Button variant="ghost" size="sm" onClick={clearFilters}>
                   <X className="mr-1 h-4 w-4" />
@@ -243,125 +569,257 @@ export default function OrdersPage() {
       {/* Orders Table */}
       <Card>
         <CardContent className="p-0">
-          <Table>
+          <div className="overflow-x-auto">
+          <Table className="w-full min-w-[1200px]">
             <TableHeader>
               <TableRow>
-                <TableHead>订单号</TableHead>
-                <TableHead>乘客信息</TableHead>
-                <TableHead>航班/时间</TableHead>
-                <TableHead>地点</TableHead>
-                <TableHead>车型</TableHead>
-                <TableHead>司机</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
+                <TableHead className="w-10 shrink-0">
+                  <Checkbox
+                    checked={filteredOrders.length > 0 && selectedIds.size === filteredOrders.length}
+                    onCheckedChange={toggleSelectAll}
+                    className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                  />
+                </TableHead>
+                <TableHead className="min-w-[140px]">订单号</TableHead>
+                <TableHead className="min-w-[130px]">航班/时间</TableHead>
+                <TableHead className="min-w-[240px]">地点</TableHead>
+                <TableHead className="min-w-[120px]">车型</TableHead>
+                <TableHead className="min-w-[100px]">服务类型</TableHead>
+                <TableHead className="min-w-[48px]">人数</TableHead>
+                <TableHead className="min-w-[80px]">司机</TableHead>
+                <TableHead className="min-w-[72px]">状态</TableHead>
+                <TableHead className="min-w-[48px]"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedOrders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={10} className="h-24 text-center text-muted-foreground">
                     暂无订单数据
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedOrders.map((order) => (
-                  <TableRow
-                    key={order.id}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => router.push(`/orders/${order.id}`)}
-                  >
-                    <TableCell className="font-medium">{order.orderNo}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{order.passengerName}</span>
-                        <span className="text-xs text-muted-foreground">{order.passengerPhone}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        {order.flightNo && (
-                          <span className="font-medium">{order.flightNo}</span>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {order.flightDate} {order.pickupTime}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col max-w-[200px]">
-                        <span className="truncate text-xs" title={order.pickupAddress}>
-                          <MapPin className="inline h-3 w-3 mr-1" />
-                          {order.pickupAddress}
-                        </span>
-                        <span className="truncate text-xs text-muted-foreground" title={order.dropoffAddress}>
-                          → {order.dropoffAddress}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>{vehicleTypeLabels[order.reqVehicleType] ?? order.reqVehicleType}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <User className="h-3 w-3 text-muted-foreground" />
-                        {getDriverName(order.driverId)}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={statusConfig[order.status].variant}>
-                        {statusConfig[order.status].label}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={(e) => {
-                            e.stopPropagation()
-                            router.push(`/orders/${order.id}`)
-                          }}>
-                            查看详情
-                          </DropdownMenuItem>
-                          {order.status === 0 && (
-                            <DropdownMenuItem onClick={(e) => {
-                              e.stopPropagation()
-                              router.push(`/dispatch?orderId=${order.id}`)
-                            }}>
-                              <RefreshCw className="mr-2 h-4 w-4" />
-                              派单
-                            </DropdownMenuItem>
-                          )}
-                          {(order.status === 1 || order.status === 2) && (
-                            <DropdownMenuItem onClick={(e) => {
-                              e.stopPropagation()
-                              router.push(`/dispatch?orderId=${order.id}&reassign=true`)
-                            }}>
-                              <RefreshCw className="mr-2 h-4 w-4" />
-                              改派
-                            </DropdownMenuItem>
-                          )}
-                          <DropdownMenuSeparator />
-                          {order.status !== 3 && order.status !== 4 && (
-                            <DropdownMenuItem
-                              className="text-destructive"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleCancelOrder(order.id)
-                              }}
-                            >
-                              取消订单
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
+                paginatedOrders.map((order) => {
+                  const isExpanded = expandedOrderId === order.id
+                  const meta: Record<string, string> = order.metadata ? JSON.parse(order.metadata) : {}
+                  const hasExtra = Object.keys(meta).length > 0
+                  return (
+                    <React.Fragment key={order.id}>
+                      <TableRow
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => !batchMode && setExpandedOrderId(isExpanded ? null : order.id)}
+                      >
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={selectedIds.has(order.id)}
+                            onCheckedChange={() => toggleSelect(order.id)}
+                            className={cn("border-muted-foreground/60", !batchMode && "invisible")}
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-1.5">
+                            <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`} />
+                            <span className="truncate text-xs">{order.orderNo}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5">
+                              {order.flightNo && <span className="font-medium">{order.flightNo}</span>}
+                              {(() => {
+                                const key = `${order.flightNo}|${order.flightDate}`
+                                const fs = flightStatuses.get(key)
+                                return fs ? <FlightStatusBadge fs={fs} /> : null
+                              })()}
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {order.flightDate}{order.pickupTime ? ` ${order.pickupTime}` : ""}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-xs break-words leading-snug">
+                              <MapPin className="inline h-3 w-3 mr-1 shrink-0" />
+                              {order.pickupAddress}
+                            </span>
+                            <span className="text-xs text-muted-foreground break-words leading-snug">
+                              → {order.dropoffAddress}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          {(() => {
+                            const displayType = order.reqVehicleType === "商务型" ? "普通商务型" : order.reqVehicleType
+                            return (
+                              <Select
+                                value={displayType}
+                                onValueChange={(v) => handleVehicleTypeChange(order.id, v)}
+                              >
+                                <SelectTrigger className="h-7 text-xs w-[108px] border border-muted-foreground/30">
+                                  <div className="flex items-center gap-1.5 overflow-hidden">
+                                    <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[displayType as keyof typeof VEHICLE_TYPE_COLORS] ?? "bg-muted"}`} />
+                                    <span className="truncate">{displayType}</span>
+                                  </div>
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {VEHICLE_TYPE_OPTIONS.map(t => (
+                                    <SelectItem key={t} value={t} className="text-xs">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className={`inline-block w-2 h-2 rounded-sm shrink-0 ${VEHICLE_TYPE_COLORS[t]}`} />
+                                        {t}
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )
+                          })()}
+                        </TableCell>
+                        <TableCell><ServiceTypeBadge value={meta["服务类型"] || meta.serviceType || ""} charterHours={meta["包车时长"]} /></TableCell>
+                        <TableCell className="text-xs">{meta.passengerCount || "-"}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <User className="h-3 w-3 text-muted-foreground" />
+                            {order.driverName || getDriverName(order.driverId)}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={statusConfig[order.status].variant}>
+                            {statusConfig[order.status].label}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="max-w-[280px]">
+                              {meta.serviceStandard && (
+                                <>
+                                  <div className="px-2 py-1.5 text-xs text-muted-foreground break-words whitespace-normal leading-relaxed">
+                                    {meta.serviceStandard}
+                                  </div>
+                                  <DropdownMenuSeparator />
+                                </>
+                              )}
+                              {order.status === 0 && (
+                                <DropdownMenuItem onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push(`/dispatch?orderId=${order.id}`)
+                                }}>
+                                  <RefreshCw className="mr-2 h-4 w-4" />
+                                  派单
+                                </DropdownMenuItem>
+                              )}
+                              {order.status === 1 && (
+                                <DropdownMenuItem onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleCancelDispatch(order.id)
+                                }}>
+                                  <Ban className="mr-2 h-4 w-4" />
+                                  撤销派单
+                                </DropdownMenuItem>
+                              )}
+                              {(order.status === 1 || order.status === 2) && (
+                                <DropdownMenuItem onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push(`/dispatch?orderId=${order.id}&reassign=true`)
+                                }}>
+                                  <RefreshCw className="mr-2 h-4 w-4" />
+                                  改派
+                                </DropdownMenuItem>
+                              )}
+                              {(meta["服务类型"] === "包车" || meta.serviceType === "包车") && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetCharterHours(order.id, 4, order.metadata || "") }}
+                                    className={!meta["包车时长"] ? "text-orange-400" : ""}
+                                  >
+                                    {!meta["包车时长"] && "⚠ "}包车：4 小时{meta["包车时长"] === "4" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetCharterHours(order.id, 8, order.metadata || "") }}
+                                    className={!meta["包车时长"] ? "text-orange-400" : ""}
+                                  >
+                                    {!meta["包车时长"] && "⚠ "}包车：8 小时{meta["包车时长"] === "8" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                              {order.reqVehicleType === "商务型" && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "豪华商务型", order.metadata || "") }}
+                                    className={!meta["商务类型"] ? "text-yellow-400" : ""}
+                                  >
+                                    {!meta["商务类型"] && "⚠ "}豪华商务型{meta["商务类型"] === "豪华商务型" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={(e) => { e.stopPropagation(); handleSetBusinessType(order.id, "普通商务型", order.metadata || "") }}
+                                    className={!meta["商务类型"] ? "text-yellow-400" : ""}
+                                  >
+                                    {!meta["商务类型"] && "⚠ "}普通商务型{meta["商务类型"] === "普通商务型" ? " ✓" : ""}
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                              <DropdownMenuSeparator />
+                              {order.status !== 3 && order.status !== 4 && (
+                                <DropdownMenuItem
+                                  className="text-destructive"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleCancelOrder(order.id)
+                                  }}
+                                >
+                                  取消订单
+                                </DropdownMenuItem>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                      {isExpanded && (
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableCell colSpan={10} className="px-6 pb-4 pt-0 max-w-0">
+                            {hasExtra ? (
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-4 pt-3 border-t border-border/30 overflow-hidden">
+                                {METADATA_GROUPS.map(group => {
+                                  const items = group.keys
+                                    .filter(k => FEE_ALWAYS_SHOW.has(k) || meta[k])
+                                    .map(k => ({ label: METADATA_LABELS[k] ?? k, value: meta[k] ?? "0" }))
+                                  if (items.length === 0) return null
+                                  return (
+                                    <div key={group.label}>
+                                      <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">{group.label}</p>
+                                      <dl className="space-y-1.5">
+                                        {items.map(item => (
+                                          <div key={item.label} className="flex justify-between text-xs gap-2">
+                                            <dt className="text-muted-foreground shrink-0">{item.label}</dt>
+                                            <dd className="font-medium text-right break-all">{item.value}</dd>
+                                          </div>
+                                        ))}
+                                      </dl>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            ) : (
+                              <p className="pt-3 text-xs text-muted-foreground border-t border-border/30">暂无额外信息</p>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
+                  )
+                })
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 
@@ -393,6 +851,43 @@ export default function OrdersPage() {
           </div>
         </div>
       )}
+      <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除确认</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除选中的 {selectedIds.size} 条订单吗？此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleBatchDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={cancelAllOpen} onOpenChange={setCancelAllOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>取消全部派单</AlertDialogTitle>
+            <AlertDialogDescription>
+              将把所有"已分配"状态的订单重置为"待排单"，司机信息会被清空。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>返回</AlertDialogCancel>
+            <AlertDialogAction onClick={handleCancelAllDispatches} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              确认取消全部
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <OrderImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onSuccess={async () => setOrders(await getOrders())}
+      />
     </div>
   )
 }

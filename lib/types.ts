@@ -9,14 +9,30 @@ export interface User {
   updatedAt: string
 }
 
-// 车辆类型
-export type VehicleType = '舒适型' | '豪华型' | '商务型' | '经济型'
+// 车辆类型（从高到低）
+// '商务型' 是导入订单时的旧值，需用户手动细分为 豪华商务型/普通商务型 后才能派单
+export type VehicleType = '豪华商务型' | '普通商务型' | '豪华型' | '舒适型' | '经济型' | '商务型'
 
 export const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
-  '舒适型': '舒适型',
+  '豪华商务型': '豪华商务型',
+  '普通商务型': '普通商务型',
   '豪华型': '豪华型',
-  '商务型': '商务型',
+  '舒适型': '舒适型',
   '经济型': '经济型',
+  '商务型': '商务型（待细分）',
+}
+
+// 司机可选车型（有序，不含旧版"商务型"）
+export const VEHICLE_TYPE_OPTIONS: VehicleType[] = ['豪华商务型', '普通商务型', '豪华型', '舒适型', '经济型']
+
+// 车型颜色（统一色块配色，全站通用）
+export const VEHICLE_TYPE_COLORS: Record<VehicleType, string> = {
+  '豪华商务型': 'bg-purple-500',
+  '普通商务型': 'bg-fuchsia-500',
+  '豪华型':     'bg-amber-500',
+  '舒适型':     'bg-blue-500',
+  '经济型':     'bg-green-500',
+  '商务型':     'bg-purple-400',
 }
 
 // 司机状态
@@ -41,9 +57,9 @@ export interface Driver {
   homeLng: number
   status: DriverStatus
   dailyOrderCount: number
-  dailyOrderLimit: number
   currentLat?: number
   currentLng?: number
+  workingHours?: string
   createdAt: string
   updatedAt: string
 }
@@ -94,6 +110,7 @@ export interface Order {
   modifiedUserId?: string
   modifiedAt?: string
   importBatchId: string | null
+  metadata?: string | null  // JSON string: extra fields from xlsx import
   createdAt: string
   updatedAt: string
 }

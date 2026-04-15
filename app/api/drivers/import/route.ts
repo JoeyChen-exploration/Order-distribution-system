@@ -2,7 +2,23 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import * as XLSX from "xlsx"
 
-const VALID_VEHICLE_TYPES = ["舒适型", "豪华型", "商务型", "经济型"]
+const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
+const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
+
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
+  if (!address) return { lat: 0, lng: 0 }
+  try {
+    const res = await fetch(
+      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=上海`
+    )
+    const data = await res.json()
+    if (data.status === "1" && data.geocodes?.length > 0) {
+      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
+      return { lat, lng }
+    }
+  } catch {}
+  return { lat: 0, lng: 0 }
+}
 
 // 处理电话号码：去除 +86- 或 +86 前缀，只保留数字
 function normalizePhone(raw: string): string {
@@ -42,28 +58,33 @@ export async function POST(req: NextRequest) {
     return headerRow.indexOf(name)
   }
 
-  const idxVehicleType  = col("车型")        // 第一个"车型"列 = 预订车型
+  const idxVehicleType  = col("车型")
   const idxPlate        = col("车号")
   const idxName         = col("司机")
   const idxPhone        = col("司机电话")
   const idxHome         = col("住")
-  const idxLimit        = col("日单上限")
+  const idxWorkingHours = col("时间")
 
   const errors: { row: number; field: string; message: string }[] = []
-  const toCreate: Parameters<typeof db.driver.create>[0]["data"][] = []
+
+  type DriverData = {
+    name: string; phone: string; vehicleType: string; vehiclePlate: string
+    homeAddress: string; homeLat: number; homeLng: number; workingHours: string
+  }
+  const toUpsert: { rowNum: number; data: DriverData }[] = []
 
   for (let i = 1; i < raw.length; i++) {
     const r = raw[i]
     const rowNum = i + 1
 
-    const vehicleType  = idxVehicleType  >= 0 ? str(r[idxVehicleType])  : ""
+    const rawVehicleType = idxVehicleType >= 0 ? str(r[idxVehicleType]) : ""
+    const vehicleType = rawVehicleType === "商务型" ? "普通商务型" : rawVehicleType
     const vehiclePlate = idxPlate        >= 0 ? str(r[idxPlate])        : ""
     const name         = idxName         >= 0 ? str(r[idxName])         : ""
     const rawPhone     = idxPhone        >= 0 ? str(r[idxPhone])        : ""
     const phone        = normalizePhone(rawPhone)
     const homeAddress  = idxHome         >= 0 ? str(r[idxHome])         : ""
-    const limitRaw     = idxLimit        >= 0 ? str(r[idxLimit])        : ""
-    const dailyOrderLimit = parseInt(limitRaw || "10", 10)
+    const workingHours = idxWorkingHours >= 0 ? str(r[idxWorkingHours]) : ""
 
     // 跳过空行（序号行或分组标题行）
     if (!name && !vehiclePlate) continue
@@ -72,32 +93,43 @@ export async function POST(req: NextRequest) {
     if (!phone)        errors.push({ row: rowNum, field: "司机电话", message: "不能为空" })
     if (!vehiclePlate) errors.push({ row: rowNum, field: "车号",    message: "不能为空" })
     if (!VALID_VEHICLE_TYPES.includes(vehicleType)) {
-      errors.push({ row: rowNum, field: "车型", message: `无效车型"${vehicleType}"，应为 舒适型/豪华型/商务型/经济型` })
+      errors.push({ row: rowNum, field: "车型", message: `无效车型"${vehicleType}"，应为 豪华商务型/普通商务型/豪华型/舒适型/商务型/经济型` })
+    }
+    if (!workingHours) {
+      errors.push({ row: rowNum, field: "时间", message: "工作时间不能为空，格式：HH:MM-HH:MM（如 06:00-22:00）" })
+    } else if (!/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(workingHours)) {
+      errors.push({ row: rowNum, field: "时间", message: `工作时间格式错误"${workingHours}"，应为 HH:MM-HH:MM` })
     }
 
-    if (!name || !phone || !vehiclePlate || !VALID_VEHICLE_TYPES.includes(vehicleType)) continue
+    const workingHoursValid = workingHours && /^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(workingHours)
+    if (!name || !phone || !vehiclePlate || !VALID_VEHICLE_TYPES.includes(vehicleType) || !workingHoursValid) continue
 
-    toCreate.push({
-      name,
-      phone,
-      vehicleType,
-      vehiclePlate,
-      homeAddress,
-      homeLat: 0,
-      homeLng: 0,
-      dailyOrderLimit: isNaN(dailyOrderLimit) ? 10 : dailyOrderLimit,
+    const homeCoord = homeAddress ? await geocodeAddress(homeAddress) : { lat: 0, lng: 0 }
+    toUpsert.push({
+      rowNum,
+      data: {
+        name, phone, vehicleType, vehiclePlate, homeAddress,
+        homeLat: homeCoord.lat, homeLng: homeCoord.lng,
+        workingHours,
+      },
     })
   }
 
-  // 批量写入，跳过重复车牌/电话
+  // 批量写入：有则更新，无则创建
   let successRows = 0
-  for (const data of toCreate) {
+  for (const { data } of toUpsert) {
     try {
-      await db.driver.create({ data: data as Parameters<typeof db.driver.create>[0]["data"] })
+      const existing = await db.driver.findFirst({
+        where: { OR: [{ vehiclePlate: data.vehiclePlate }, { phone: data.phone }] },
+      })
+      if (existing) {
+        await db.driver.update({ where: { id: existing.id }, data })
+      } else {
+        await db.driver.create({ data })
+      }
       successRows++
-    } catch {
-      const plate = (data as { vehiclePlate: string }).vehiclePlate
-      errors.push({ row: -1, field: "车号/电话", message: `"${plate}" 已存在，已跳过` })
+    } catch (e) {
+      errors.push({ row: -1, field: "车号/电话", message: `"${data.vehiclePlate}" 写入失败: ${String(e)}` })
     }
   }
 
@@ -106,7 +138,7 @@ export async function POST(req: NextRequest) {
       fileName: file.name,
       totalRows: raw.length - 1,
       successRows,
-      errorRows: (raw.length - 1) - successRows,
+      errorRows: toUpsert.length - successRows,
       errors: JSON.stringify(errors),
       importedBy,
     },
@@ -115,7 +147,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     success: true,
     successRows,
-    errorRows: (raw.length - 1) - successRows,
+    errorRows: toUpsert.length - successRows,
     errors,
     detectedHeaders: headerRow,
   })
