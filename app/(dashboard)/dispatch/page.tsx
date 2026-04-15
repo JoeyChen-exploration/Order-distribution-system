@@ -357,7 +357,7 @@ export default function DispatchPage() {
     if (totalRoutes > 0) {
       setDispatchProgress({ phase: "prefetch", current: 0, total: totalRoutes })
       let completed = 0
-      const QPS = 10  // browser-direct calls — no server proxy overhead
+      const QPS = 3  // Amap free tier limit
 
       // Concurrency-limited runner: keep exactly QPS tasks in-flight at all times
       await new Promise<void>(resolve => {

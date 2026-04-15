@@ -6,16 +6,6 @@
 
 const AMAP_KEY = process.env.NEXT_PUBLIC_AMAP_KEY ?? ""
 
-function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLng = (lng2 - lng1) * Math.PI / 180
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
-
 function getTrafficMultiplier(timeStr: string): number {
   if (!timeStr) return 1.0
   const parts = timeStr.split(":")
@@ -37,39 +27,35 @@ export async function getDriveTime(
     return { durationMinutes: 0, distanceKm: 0, source: "estimate" }
   }
 
-  if (AMAP_KEY) {
-    try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 5000)
-      const url =
-        `https://restapi.amap.com/v3/direction/driving` +
-        `?origin=${originLng},${originLat}` +
-        `&destination=${destLng},${destLat}` +
-        `&strategy=0&extensions=base` +
-        `&key=${AMAP_KEY}`
-      const res = await fetch(url, { signal: controller.signal })
-      clearTimeout(timeout)
-      const data = await res.json()
-      if (data.status === "1" && data.route?.paths?.[0]) {
-        const path = data.route.paths[0]
-        const durationSec = parseInt(path.duration, 10)
-        const distanceM   = parseInt(path.distance, 10)
-        const multiplier  = getTrafficMultiplier(pickupTime ?? "")
-        return {
-          durationMinutes: Math.ceil(durationSec / 60 * multiplier),
-          distanceKm: distanceM / 1000,
-          source: "amap",
-        }
+  if (!AMAP_KEY) return { durationMinutes: 0, distanceKm: 0, source: "estimate" }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 8000)
+  try {
+    const url =
+      `https://restapi.amap.com/v3/direction/driving` +
+      `?origin=${originLng},${originLat}` +
+      `&destination=${destLng},${destLat}` +
+      `&strategy=0&extensions=base` +
+      `&key=${AMAP_KEY}`
+    const res = await fetch(url, { signal: controller.signal })
+    clearTimeout(timeout)
+    const data = await res.json()
+    if (data.status === "1" && data.route?.paths?.[0]) {
+      const path = data.route.paths[0]
+      const durationSec = parseInt(path.duration, 10)
+      const distanceM   = parseInt(path.distance, 10)
+      const multiplier  = getTrafficMultiplier(pickupTime ?? "")
+      return {
+        durationMinutes: Math.ceil(durationSec / 60 * multiplier),
+        distanceKm: distanceM / 1000,
+        source: "amap",
       }
-    } catch {}
+    }
+  } catch {
+    clearTimeout(timeout)
   }
 
-  // Fallback: haversine + traffic multiplier
-  const dist = haversine(originLat, originLng, destLat, destLng)
-  const multiplier = getTrafficMultiplier(pickupTime ?? "")
-  return {
-    durationMinutes: Math.ceil(dist / 35 * 60 * multiplier),
-    distanceKm: dist,
-    source: "estimate",
-  }
+  // Amap 未返回结果 — 返回 0，让调用方决定是否使用估算
+  return { durationMinutes: 0, distanceKm: 0, source: "estimate" }
 }
