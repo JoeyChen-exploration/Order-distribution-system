@@ -23,6 +23,9 @@ import {
   Download,
   Ban,
   Loader2,
+  Pencil,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -153,6 +156,13 @@ export default function OrdersPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null)
   const [batchMode, setBatchMode] = useState(false)
+
+  // Inline address editing
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null)
+  const [editPickup, setEditPickup] = useState("")
+  const [editDropoff, setEditDropoff] = useState("")
+  const [addressGeocoding, setAddressGeocoding] = useState(false)
+  const [addressStatus, setAddressStatus] = useState<"idle" | "ok" | "partial" | "error">("idle")
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
@@ -219,6 +229,46 @@ export default function OrdersPage() {
   const handleCancelOrder = async (orderId: string) => {
     await updateOrder(orderId, { status: 4 })
     setOrders(await getOrders())
+  }
+
+  const openAddressEditor = (order: Order) => {
+    setEditingAddressId(order.id)
+    setEditPickup(order.pickupAddress)
+    setEditDropoff(order.dropoffAddress)
+    setAddressStatus("idle")
+  }
+
+  const handleSaveAddress = async (orderId: string) => {
+    setAddressGeocoding(true)
+    setAddressStatus("idle")
+    try {
+      const geocode = async (addr: string) => {
+        if (!addr.trim()) return null
+        const city = addr.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)?.[0]?.replace(/省|区|县/, "市") ?? "上海"
+        const res = await fetch(`/api/geocode?address=${encodeURIComponent(addr)}&city=${encodeURIComponent(city)}`)
+        const data = await res.json()
+        return data.lat && data.lng ? { lat: data.lat as number, lng: data.lng as number } : null
+      }
+      const [pickup, dropoff] = await Promise.all([geocode(editPickup), geocode(editDropoff)])
+      const updates: Partial<Order> = {
+        pickupAddress:  editPickup,
+        dropoffAddress: editDropoff,
+        pickupLat:  pickup?.lat  ?? 0,
+        pickupLng:  pickup?.lng  ?? 0,
+        dropoffLat: dropoff?.lat ?? 0,
+        dropoffLng: dropoff?.lng ?? 0,
+      }
+      await updateOrder(orderId, updates)
+      setOrders(await getOrders())
+      if (pickup && dropoff) {
+        setAddressStatus("ok")
+        setTimeout(() => { setEditingAddressId(null); setAddressStatus("idle") }, 1000)
+      } else {
+        setAddressStatus(pickup || dropoff ? "partial" : "error")
+      }
+    } finally {
+      setAddressGeocoding(false)
+    }
   }
 
   const handleVehicleTypeChange = async (orderId: string, newType: string) => {
@@ -785,8 +835,83 @@ export default function OrdersPage() {
                       {isExpanded && (
                         <TableRow className="bg-muted/20 hover:bg-muted/20">
                           <TableCell colSpan={10} className="px-6 pb-4 pt-0 max-w-0">
+                            {/* Address editor */}
+                            <div className="pt-3 border-t border-border/30 mb-3">
+                              {editingAddressId === order.id ? (
+                                <div className="space-y-2">
+                                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">修改地址</p>
+                                  <div className="flex items-center gap-2">
+                                    <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                    <Input
+                                      value={editPickup}
+                                      onChange={e => setEditPickup(e.target.value)}
+                                      placeholder="上车点"
+                                      className="h-7 text-xs flex-1"
+                                      disabled={addressGeocoding}
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 opacity-50" />
+                                    <Input
+                                      value={editDropoff}
+                                      onChange={e => setEditDropoff(e.target.value)}
+                                      placeholder="目的地"
+                                      className="h-7 text-xs flex-1"
+                                      disabled={addressGeocoding}
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-2 pt-0.5">
+                                    <Button
+                                      size="sm"
+                                      className="h-7 text-xs"
+                                      onClick={() => handleSaveAddress(order.id)}
+                                      disabled={addressGeocoding}
+                                    >
+                                      {addressGeocoding
+                                        ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />解析中…</>
+                                        : "保存并解析"}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 text-xs"
+                                      onClick={() => { setEditingAddressId(null); setAddressStatus("idle") }}
+                                      disabled={addressGeocoding}
+                                    >
+                                      取消
+                                    </Button>
+                                    {addressStatus === "ok" && <span className="text-xs text-emerald-400 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />坐标已更新</span>}
+                                    {addressStatus === "partial" && <span className="text-xs text-amber-400 flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5" />部分地址解析失败，请继续修改</span>}
+                                    {addressStatus === "error" && <span className="text-xs text-red-400 flex items-center gap-1"><AlertCircle className="h-3.5 w-3.5" />两个地址均未能解析，请检查</span>}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex items-start gap-4">
+                                  <div className="flex-1 space-y-0.5">
+                                    <p className="text-xs flex items-center gap-1.5">
+                                      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${order.pickupLat && order.pickupLng && order.pickupLat !== 0 ? "bg-emerald-500" : "bg-red-500"}`} />
+                                      <span className="text-muted-foreground">上车：</span>
+                                      <span>{order.pickupAddress}</span>
+                                    </p>
+                                    <p className="text-xs flex items-center gap-1.5">
+                                      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${order.dropoffLat && order.dropoffLng && order.dropoffLat !== 0 ? "bg-emerald-500" : "bg-red-500"}`} />
+                                      <span className="text-muted-foreground">目的地：</span>
+                                      <span>{order.dropoffAddress}</span>
+                                    </p>
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs shrink-0"
+                                    onClick={e => { e.stopPropagation(); openAddressEditor(order) }}
+                                  >
+                                    <Pencil className="h-3 w-3 mr-1" />修改地址
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
                             {hasExtra ? (
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-4 pt-3 border-t border-border/30 overflow-hidden">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-4 overflow-hidden">
                                 {METADATA_GROUPS.map(group => {
                                   const items = group.keys
                                     .filter(k => FEE_ALWAYS_SHOW.has(k) || meta[k])
@@ -807,9 +932,7 @@ export default function OrdersPage() {
                                   )
                                 })}
                               </div>
-                            ) : (
-                              <p className="pt-3 text-xs text-muted-foreground border-t border-border/30">暂无额外信息</p>
-                            )}
+                            ) : null}
                           </TableCell>
                         </TableRow>
                       )}

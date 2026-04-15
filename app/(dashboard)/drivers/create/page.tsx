@@ -26,18 +26,14 @@ const TIME_OPTIONS: string[] = Array.from({ length: 48 }, (_, i) => {
   return `${h}:${m}`
 })
 
-const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
-
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
   try {
+    const city = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)?.[0]?.replace(/省|区|县/, "市") ?? "上海"
     const res = await fetch(
-      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}`
+      `/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`
     )
     const data = await res.json()
-    if (data.status === "1" && data.geocodes?.length > 0) {
-      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
-      return { lat, lng }
-    }
+    if (data.lat && data.lng) return { lat: data.lat as number, lng: data.lng as number }
   } catch {}
   return null
 }
