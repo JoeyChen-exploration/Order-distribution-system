@@ -28,16 +28,7 @@ interface DispatchHistoryItem {
   dropoffAddress: string
   reqVehicleType: string
   serviceType?: string
-  serviceCity?: string
-  airportCode?: string
-  passengerCount?: string
-  submittedAt?: string
-  driverGroup?: string
-  tripNo?: string
-  kilometers?: string
-  serviceStandard?: string
-  signService?: string
-  remarks?: string
+  metadata?: string
   matched: boolean
   driverId?: string
   driverName?: string
@@ -103,7 +94,6 @@ export default function DispatchHistoryPage() {
   }, [])
 
   const exportCsv = (rec: DispatchHistoryRecord) => {
-    // 列顺序与排单结果 Excel 格式保持一致
     const headers = [
       "订单号", "预订车型", "服务类型", "服务城市", "服务日期",
       "三字码", "人数", "下单时间", "航班号", "上车点", "下车点",
@@ -111,32 +101,34 @@ export default function DispatchHistoryPage() {
       "架次", "公里数", "服务标准", "举牌服务", "备注",
     ]
     const rows = rec.items.map(i => {
-      // 服务日期格式：2026-03-24 01:10:00
+      let m: Record<string, string> = {}
+      try { m = JSON.parse(i.metadata || "{}") } catch {}
+      const g = (k: string, fallback = "") => m[k] ?? fallback
       const serviceDate = i.flightDate && i.pickupTime
         ? `${i.flightDate} ${i.pickupTime}:00`
         : i.flightDate ?? ""
       return [
         i.orderNo,
         i.reqVehicleType,
-        i.serviceType ?? "",
-        i.serviceCity ?? "",
+        i.serviceType || g("服务类型") || g("serviceType"),
+        g("服务城市") || g("serviceCity"),
         serviceDate,
-        i.airportCode ?? "",
-        i.passengerCount ?? "",
-        i.submittedAt ?? "",
+        g("三字码") || g("airportCode"),
+        g("人数") || g("passengerCount"),
+        g("下单时间") || g("submittedAt"),
         i.flightNo,
         i.pickupAddress,
         i.dropoffAddress,
         i.vehiclePlate ?? "",
         i.driverName ?? "",
         i.driverPhone ?? "",
-        i.driverGroup ?? "",
+        g("司机分组") || g("driverGroup"),
         i.vehicleType ?? "",
-        i.tripNo ?? "",
-        i.kilometers ?? "",
-        i.serviceStandard ?? "",
-        i.signService ?? "",
-        i.remarks ?? "",
+        g("架次") || g("tripNo"),
+        g("公里数") || g("kilometers"),
+        g("服务标准") || g("serviceStandard"),
+        g("举牌服务") || g("signService"),
+        g("备注") || g("remarks"),
       ].map(v => `"${String(v).replace(/"/g, '""')}"`)
     })
     const dateStr = rec.createdAt.slice(0, 10).replace(/-/g, "")

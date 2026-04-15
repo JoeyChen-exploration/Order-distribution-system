@@ -433,22 +433,10 @@ export default function DispatchPage() {
     const historyItems = Array.from(batchResults.entries()).map(([orderId, result]) => {
       const order = allOrders.find(o => o.id === orderId) || pendingOrders.find(o => o.id === orderId)
       const driver = result.bestMatch ? drivers.find(d => d.id === result.bestMatch!.driverId) : null
-      let serviceType = "", serviceCity = "", airportCode = "", passengerCount = "",
-          submittedAt = "", driverGroup = "", tripNo = "", kilometers = "",
-          serviceStandard = "", signService = "", remarks = ""
+      let serviceType = ""
       try {
         const m = JSON.parse(order?.metadata || "{}")
-        serviceType     = m.serviceType     || m["服务类型"]   || ""
-        serviceCity     = m.serviceCity     || m["服务城市"]   || ""
-        airportCode     = m.airportCode     || m["三字码"]     || ""
-        passengerCount  = m.passengerCount  || m["人数"]       || ""
-        submittedAt     = m.submittedAt     || m["下单时间"]   || ""
-        driverGroup     = m.driverGroup     || m["司机分组"]   || ""
-        tripNo          = m.tripNo          || m["架次"]       || ""
-        kilometers      = m.kilometers      || m["公里数"]     || ""
-        serviceStandard = m.serviceStandard || m["服务标准"]   || ""
-        signService     = m.signService     || m["举牌服务"]   || ""
-        remarks         = m.remarks         || m["备注"]       || ""
+        serviceType = m.serviceType || m["服务类型"] || ""
       } catch {}
       return {
         orderId,
@@ -459,9 +447,8 @@ export default function DispatchPage() {
         pickupAddress: order?.pickupAddress || "",
         dropoffAddress: order?.dropoffAddress || "",
         reqVehicleType: order?.reqVehicleType || "",
-        serviceType, serviceCity, airportCode, passengerCount,
-        submittedAt, driverGroup, tripNo, kilometers,
-        serviceStandard, signService, remarks,
+        serviceType,
+        metadata: order?.metadata ?? "",
         matched: !!result.bestMatch,
         driverId: result.bestMatch?.driverId,
         driverName: result.bestMatch?.driverName,
