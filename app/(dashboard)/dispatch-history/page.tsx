@@ -11,6 +11,7 @@ import {
   XCircle,
   History,
   Loader2,
+  Download,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { VEHICLE_TYPE_COLORS } from "@/lib/types"
@@ -91,6 +92,25 @@ export default function DispatchHistoryPage() {
       .catch(() => setLoading(false))
   }, [])
 
+  const exportCsv = (rec: DispatchHistoryRecord) => {
+    const headers = ["订单号", "航班号", "服务日期", "上车时间", "上车点", "目的地", "预订车型", "服务类型", "匹配状态", "司机姓名", "司机电话", "车牌号", "实际车型", "评分", "失败原因"]
+    const rows = rec.items.map(i => [
+      i.orderNo, i.flightNo, i.flightDate, i.pickupTime,
+      i.pickupAddress, i.dropoffAddress, i.reqVehicleType,
+      i.serviceType ?? "",
+      i.matched ? "已匹配" : "未匹配",
+      i.driverName ?? "", i.driverPhone ?? "", i.vehiclePlate ?? "",
+      i.vehicleType ?? "",
+      i.score !== undefined ? i.score.toFixed(1) : "",
+      i.failReason ?? "",
+    ].map(v => `"${String(v).replace(/"/g, '""')}"`))
+    const csv = "\ufeff" + [headers, ...rows].map(r => r.join(",")).join("\n")
+    const a = document.createElement("a")
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }))
+    a.download = `派单结果_${rec.createdAt.slice(0, 10)}.csv`
+    a.click()
+  }
+
   const toggle = (id: string) => {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -125,7 +145,7 @@ export default function DispatchHistoryPage() {
       )}
 
       <div className="flex flex-col gap-4">
-        {records.map((rec, idx) => {
+        {records.map((rec) => {
           const isOpen = expanded.has(rec.id)
           const date = new Date(rec.createdAt)
           const matchedItems = rec.items.filter(i => i.matched)
@@ -136,11 +156,6 @@ export default function DispatchHistoryPage() {
               {/* Header row */}
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-4 flex-wrap">
-                  {/* Index badge */}
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-bold shrink-0">
-                    {records.length - idx}
-                  </div>
-
                   {/* Date / time */}
                   <div className="min-w-[140px]">
                     <p className="text-sm font-medium text-foreground">
@@ -169,19 +184,30 @@ export default function DispatchHistoryPage() {
                     <MatchRateBar matched={rec.matched} total={rec.totalOrders} />
                   </div>
 
-                  {/* Expand toggle */}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground h-8 px-3 ml-auto"
-                    onClick={() => toggle(rec.id)}
-                  >
-                    {isOpen ? (
-                      <><ChevronUp className="w-4 h-4 mr-1" />收起</>
-                    ) : (
-                      <><ChevronDown className="w-4 h-4 mr-1" />展开详情</>
-                    )}
-                  </Button>
+                  {/* Actions */}
+                  <div className="flex items-center gap-2 ml-auto">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-3 text-xs"
+                      onClick={() => exportCsv(rec)}
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1" />
+                      导出 CSV
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground h-8 px-3"
+                      onClick={() => toggle(rec.id)}
+                    >
+                      {isOpen ? (
+                        <><ChevronUp className="w-4 h-4 mr-1" />收起</>
+                      ) : (
+                        <><ChevronDown className="w-4 h-4 mr-1" />展开详情</>
+                      )}
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
 
