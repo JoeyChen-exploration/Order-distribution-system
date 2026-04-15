@@ -219,10 +219,11 @@ GET https://restapi.amap.com/v3/geocode/geo?address=<地址>&key=<KEY>&city=<自
 
 **服务类型字段存储**：「服务类型」列以中文 key `服务类型` 存入 `metadata`，算法同时兼容老数据的英文 key `serviceType`。未被识别的类型值（如"点对点"）自动映射为"市内约车"。
 
-**API Key 位置**：
-- `components/order-import-dialog.tsx`
-- `app/api/drivers/import/route.ts`
-- `app/api/maps/drivetime/route.ts`
+**环境变量配置**（`.env.local`）：
+```
+AMAP_KEY=你的高德 Web Service Key
+```
+所有高德 API 调用均通过服务端代理（`/api/geocode`、`/api/maps/drivetime`），Key 不暴露在浏览器端。
 
 ---
 
@@ -258,6 +259,7 @@ GET https://restapi.amap.com/v3/geocode/geo?address=<地址>&key=<KEY>&city=<自
 
 **配置**：在 `.env.local` 中添加：
 ```
+AMAP_KEY=你的高德 Web Service Key
 AVIATIONSTACK_API_KEY=你的密钥
 ```
 免费账号 100次/月，够测试。生产环境建议升级或接入飞常准 API。
@@ -317,6 +319,20 @@ AVIATIONSTACK_API_KEY=你的密钥
 | 车型 | ✓ | 豪华商务型/普通商务型/豪华型/舒适型/经济型（可在司机管理下拉菜单随时修改） |
 | 家庭住址 | 推荐 | 用于 geocoding，影响距离评分 |
 | 工作时间 | 推荐 | 格式 HH:MM-HH:MM，支持跨午夜如 22:00-06:00 |
+
+---
+
+## 安全说明
+
+| 措施 | 实现 |
+|---|---|
+| API Key 隔离 | 高德 Key 存于 `.env.local`（已在 `.gitignore`），客户端组件通过 `/api/geocode` 服务端代理调用，Key 不暴露浏览器 |
+| 密码哈希 | 用户密码使用 bcryptjs（cost 12）存储；首次登录时自动将旧版明文密码迁移为哈希值 |
+| 字段白名单 | PATCH/POST 路由对请求体做字段白名单过滤，拒绝写入不允许的字段 |
+| 错误信息隔离 | 所有 catch 块返回通用 "Internal server error"，不向客户端暴露堆栈或文件路径 |
+| 文件上传限制 | 导入接口校验文件大小（≤ 10 MB）、扩展名（xlsx/xls/csv）、行数（≤ 5000 行） |
+| 批量删除限制 | 单次批量删除最多 200 条，ID 格式校验（cuid 正则） |
+| 未覆盖 | API 路由目前无 JWT/Session 鉴权（内网部署），如需对外暴露请在 Next.js middleware 层添加 |
 
 ---
 
