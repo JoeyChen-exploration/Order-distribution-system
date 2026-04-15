@@ -14,6 +14,7 @@ import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { Upload, FileSpreadsheet, X, CheckCircle2, AlertCircle, Loader2 } from "lucide-react"
 import { createOrder } from "@/lib/store"
+import { geocodeAddress as geocodeFromAmap } from "@/lib/geocode-client"
 
 // ─── 常量 ────────────────────────────────────────────────────────────────────
 
@@ -74,21 +75,9 @@ const ADDR_ALIAS: Record<string, string> = {
   "shanghai hongqiao railway station": "上海虹桥站",
 }
 
-function extractCity(address: string): string {
-  const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
-  return m ? m[0].replace(/省|区|县/, "市") : "上海"
-}
-
 async function tryGeocode(address: string): Promise<{ lat: number; lng: number } | null> {
-  try {
-    const city = extractCity(address)
-    const res = await fetch(
-      `/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`
-    )
-    const data = await res.json()
-    if (data.lat && data.lng) return { lat: data.lat, lng: data.lng }
-  } catch {}
-  return null
+  const result = await geocodeFromAmap(address)
+  return result
 }
 
 /** 剥离地址中的括号导航提示，如"(临顿路地铁站1号口步行380米)" */

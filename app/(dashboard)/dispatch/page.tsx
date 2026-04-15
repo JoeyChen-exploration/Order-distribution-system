@@ -59,21 +59,7 @@ const serviceTypeConfig: Record<string, { border: string; text: string; bg: stri
   "市内约车": { border: "border-violet-500",  text: "text-violet-400",  bg: "bg-violet-500/10" },
 }
 
-function extractCity(address: string): string {
-  const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
-  return m ? m[0].replace(/省|区|县/, "市") : "上海"
-}
-
-async function geocodeAddr(address: string): Promise<{ lat: number; lng: number } | null> {
-  if (!address) return null
-  try {
-    const city = extractCity(address)
-    const res = await fetch(`/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`)
-    const data = await res.json()
-    if (data.lat && data.lng) return { lat: data.lat, lng: data.lng }
-  } catch {}
-  return null
-}
+const geocodeAddr = (addr: string) => import("@/lib/geocode-client").then(m => m.geocodeAddress(addr))
 
 function ServiceTypeBadge({ value, charterHours }: { value: string; charterHours?: string }) {
   const cfg = serviceTypeConfig[value]

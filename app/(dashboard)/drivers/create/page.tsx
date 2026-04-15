@@ -18,6 +18,7 @@ import { createDriver } from '@/lib/store'
 import type { Driver, VehicleType, DriverStatus } from '@/lib/types'
 import { VEHICLE_TYPE_OPTIONS } from '@/lib/types'
 import { ArrowLeft, Save, MapPin, Loader2 } from 'lucide-react'
+import { geocodeAddress } from '@/lib/geocode-client'
 
 // 每 30 分钟一个选项，共 48 个时间点
 const TIME_OPTIONS: string[] = Array.from({ length: 48 }, (_, i) => {
@@ -25,18 +26,6 @@ const TIME_OPTIONS: string[] = Array.from({ length: 48 }, (_, i) => {
   const m = i % 2 === 0 ? '00' : '30'
   return `${h}:${m}`
 })
-
-async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
-  try {
-    const city = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)?.[0]?.replace(/省|区|县/, "市") ?? "上海"
-    const res = await fetch(
-      `/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`
-    )
-    const data = await res.json()
-    if (data.lat && data.lng) return { lat: data.lat as number, lng: data.lng as number }
-  } catch {}
-  return null
-}
 
 export default function CreateDriverPage() {
   const router = useRouter()

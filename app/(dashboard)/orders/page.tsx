@@ -70,6 +70,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { getOrders, getDrivers, updateOrder, updateDriver, cancelDispatch } from "@/lib/store"
+import { geocodeAddress } from "@/lib/geocode-client"
 import type { Order, OrderStatus } from "@/lib/types"
 import { VEHICLE_TYPE_OPTIONS, VEHICLE_TYPE_COLORS } from "@/lib/types"
 import { OrderImportDialog } from "@/components/order-import-dialog"
@@ -244,17 +245,8 @@ export default function OrdersPage() {
     setAddressGeocoding(true)
     setAddressStatus("idle")
     try {
-      const geocode = async (addr: string) => {
-        if (!addr.trim()) return null
-        const city = addr.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)?.[0]?.replace(/省|区|县/, "市") ?? "上海"
-        const res = await fetch(`/api/geocode?address=${encodeURIComponent(addr)}&city=${encodeURIComponent(city)}`)
-        const data = await res.json()
-        return data.lat && data.lng
-          ? { lat: data.lat as number, lng: data.lng as number, resolved: data.resolvedAddress as string | undefined }
-          : null
-      }
-      const [pickup, dropoff] = await Promise.all([geocode(editPickup), geocode(editDropoff)])
-      setResolvedAddresses({ pickup: pickup?.resolved, dropoff: dropoff?.resolved })
+      const [pickup, dropoff] = await Promise.all([geocodeAddress(editPickup), geocodeAddress(editDropoff)])
+      setResolvedAddresses({ pickup: pickup?.resolvedAddress, dropoff: dropoff?.resolvedAddress })
       const updates: Partial<Order> = {
         pickupAddress:  editPickup,
         dropoffAddress: editDropoff,

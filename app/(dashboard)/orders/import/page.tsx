@@ -27,25 +27,12 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { createOrder } from "@/lib/store"
-
-function extractCity(address: string): string {
-  const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
-  return m ? m[0].replace(/省|区|县/, "市") : "上海"
-}
+import { geocodeAddress as geocodeFromAmap } from "@/lib/geocode-client"
 
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
   if (!address) return { lat: 0, lng: 0 }
-  try {
-    const city = extractCity(address)
-    const res = await fetch(
-      `/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`
-    )
-    const data = await res.json()
-    if (data.lat && data.lng) {
-      return { lat: data.lat, lng: data.lng }
-    }
-  } catch {}
-  return { lat: 0, lng: 0 }
+  const result = await geocodeFromAmap(address)
+  return result ?? { lat: 0, lng: 0 }
 }
 
 interface ParsedRow {
