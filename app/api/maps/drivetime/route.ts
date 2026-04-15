@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-const AMAP_KEY = process.env.AMAP_KEY
-if (!AMAP_KEY) throw new Error("AMAP_KEY env variable is not set")
+const AMAP_KEY = process.env.AMAP_KEY ?? ""
 
 /**
  * GET /api/maps/drivetime

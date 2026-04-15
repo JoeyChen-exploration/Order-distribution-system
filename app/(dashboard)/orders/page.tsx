@@ -163,6 +163,7 @@ export default function OrdersPage() {
   const [editDropoff, setEditDropoff] = useState("")
   const [addressGeocoding, setAddressGeocoding] = useState(false)
   const [addressStatus, setAddressStatus] = useState<"idle" | "ok" | "partial" | "error">("idle")
+  const [resolvedAddresses, setResolvedAddresses] = useState<{ pickup?: string; dropoff?: string }>({})
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [importDialogOpen, setImportDialogOpen] = useState(false)
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
@@ -236,6 +237,7 @@ export default function OrdersPage() {
     setEditPickup(order.pickupAddress)
     setEditDropoff(order.dropoffAddress)
     setAddressStatus("idle")
+    setResolvedAddresses({})
   }
 
   const handleSaveAddress = async (orderId: string) => {
@@ -247,9 +249,12 @@ export default function OrdersPage() {
         const city = addr.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)?.[0]?.replace(/省|区|县/, "市") ?? "上海"
         const res = await fetch(`/api/geocode?address=${encodeURIComponent(addr)}&city=${encodeURIComponent(city)}`)
         const data = await res.json()
-        return data.lat && data.lng ? { lat: data.lat as number, lng: data.lng as number } : null
+        return data.lat && data.lng
+          ? { lat: data.lat as number, lng: data.lng as number, resolved: data.resolvedAddress as string | undefined }
+          : null
       }
       const [pickup, dropoff] = await Promise.all([geocode(editPickup), geocode(editDropoff)])
+      setResolvedAddresses({ pickup: pickup?.resolved, dropoff: dropoff?.resolved })
       const updates: Partial<Order> = {
         pickupAddress:  editPickup,
         dropoffAddress: editDropoff,
@@ -842,23 +847,29 @@ export default function OrdersPage() {
                                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">修改地址</p>
                                   <div className="flex items-center gap-2">
                                     <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                    <Input
-                                      value={editPickup}
-                                      onChange={e => setEditPickup(e.target.value)}
-                                      placeholder="上车点"
-                                      className="h-7 text-xs flex-1"
-                                      disabled={addressGeocoding}
-                                    />
+                                    <div className="flex-1 space-y-0.5">
+                                      <Input
+                                        value={editPickup}
+                                        onChange={e => { setEditPickup(e.target.value); setResolvedAddresses(p => ({...p, pickup: undefined})) }}
+                                        placeholder="上车点"
+                                        className="h-7 text-xs"
+                                        disabled={addressGeocoding}
+                                      />
+                                      {resolvedAddresses.pickup && <p className="text-[11px] text-emerald-400 pl-1">✓ 解析为：{resolvedAddresses.pickup}</p>}
+                                    </div>
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 opacity-50" />
-                                    <Input
-                                      value={editDropoff}
-                                      onChange={e => setEditDropoff(e.target.value)}
-                                      placeholder="目的地"
-                                      className="h-7 text-xs flex-1"
-                                      disabled={addressGeocoding}
-                                    />
+                                    <div className="flex-1 space-y-0.5">
+                                      <Input
+                                        value={editDropoff}
+                                        onChange={e => { setEditDropoff(e.target.value); setResolvedAddresses(p => ({...p, dropoff: undefined})) }}
+                                        placeholder="目的地"
+                                        className="h-7 text-xs"
+                                        disabled={addressGeocoding}
+                                      />
+                                      {resolvedAddresses.dropoff && <p className="text-[11px] text-emerald-400 pl-1">✓ 解析为：{resolvedAddresses.dropoff}</p>}
+                                    </div>
                                   </div>
                                   <div className="flex items-center gap-2 pt-0.5">
                                     <Button
