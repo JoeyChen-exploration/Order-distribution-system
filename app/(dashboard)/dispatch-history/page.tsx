@@ -28,6 +28,16 @@ interface DispatchHistoryItem {
   dropoffAddress: string
   reqVehicleType: string
   serviceType?: string
+  serviceCity?: string
+  airportCode?: string
+  passengerCount?: string
+  submittedAt?: string
+  driverGroup?: string
+  tripNo?: string
+  kilometers?: string
+  serviceStandard?: string
+  signService?: string
+  remarks?: string
   matched: boolean
   driverId?: string
   driverName?: string
@@ -93,21 +103,47 @@ export default function DispatchHistoryPage() {
   }, [])
 
   const exportCsv = (rec: DispatchHistoryRecord) => {
-    const headers = ["订单号", "航班号", "服务日期", "上车时间", "上车点", "目的地", "预订车型", "服务类型", "匹配状态", "司机姓名", "司机电话", "车牌号", "实际车型", "评分", "失败原因"]
-    const rows = rec.items.map(i => [
-      i.orderNo, i.flightNo, i.flightDate, i.pickupTime,
-      i.pickupAddress, i.dropoffAddress, i.reqVehicleType,
-      i.serviceType ?? "",
-      i.matched ? "已匹配" : "未匹配",
-      i.driverName ?? "", i.driverPhone ?? "", i.vehiclePlate ?? "",
-      i.vehicleType ?? "",
-      i.score !== undefined ? i.score.toFixed(1) : "",
-      i.failReason ?? "",
-    ].map(v => `"${String(v).replace(/"/g, '""')}"`))
+    // 列顺序与排单结果 Excel 格式保持一致
+    const headers = [
+      "订单号", "预订车型", "服务类型", "服务城市", "服务日期",
+      "三字码", "人数", "下单时间", "航班号", "上车点", "下车点",
+      "车号", "司机", "司机电话", "司机分组", "实际车型",
+      "架次", "公里数", "服务标准", "举牌服务", "备注",
+    ]
+    const rows = rec.items.map(i => {
+      // 服务日期格式：2026-03-24 01:10:00
+      const serviceDate = i.flightDate && i.pickupTime
+        ? `${i.flightDate} ${i.pickupTime}:00`
+        : i.flightDate ?? ""
+      return [
+        i.orderNo,
+        i.reqVehicleType,
+        i.serviceType ?? "",
+        i.serviceCity ?? "",
+        serviceDate,
+        i.airportCode ?? "",
+        i.passengerCount ?? "",
+        i.submittedAt ?? "",
+        i.flightNo,
+        i.pickupAddress,
+        i.dropoffAddress,
+        i.vehiclePlate ?? "",
+        i.driverName ?? "",
+        i.driverPhone ?? "",
+        i.driverGroup ?? "",
+        i.vehicleType ?? "",
+        i.tripNo ?? "",
+        i.kilometers ?? "",
+        i.serviceStandard ?? "",
+        i.signService ?? "",
+        i.remarks ?? "",
+      ].map(v => `"${String(v).replace(/"/g, '""')}"`)
+    })
+    const dateStr = rec.createdAt.slice(0, 10).replace(/-/g, "")
     const csv = "\ufeff" + [headers, ...rows].map(r => r.join(",")).join("\n")
     const a = document.createElement("a")
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }))
-    a.download = `派单结果_${rec.createdAt.slice(0, 10)}.csv`
+    a.download = `排单结果_${dateStr}.csv`
     a.click()
   }
 
