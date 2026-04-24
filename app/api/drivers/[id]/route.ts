@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import { requireAuth } from "@/lib/auth-server"
 
 // GET /api/drivers/:id
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = requireAuth(_req)
+  if (auth.error) return auth.error
+
   const { id } = await params
   const driver = await db.driver.findUnique({ where: { id } })
   if (!driver) return NextResponse.json({ error: "Not found" }, { status: 404 })
@@ -11,6 +15,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 // PATCH /api/drivers/:id
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   const { id } = await params
   const body = await req.json()
   const driver = await db.driver.update({ where: { id }, data: body })
@@ -19,6 +26,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 // DELETE /api/drivers/:id
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = requireAuth(_req)
+  if (auth.error) return auth.error
+
   const { id } = await params
   try {
     await db.driver.delete({ where: { id } })

@@ -1,8 +1,12 @@
-import { NextResponse } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import { requireAuth } from "@/lib/auth-server"
 
 // GET /api/stats
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   const [orders, drivers] = await Promise.all([
     db.order.findMany({ select: { status: true } }),
     db.driver.findMany({ select: { status: true } }),

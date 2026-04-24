@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import * as XLSX from "xlsx"
+import { parseXlsx } from "@/lib/excel-utils"
+import { requireAuth } from "@/lib/auth-server"
 
 const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
-const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
+const AMAP_KEY = process.env.AMAP_KEY || ""
 
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
-  if (!address) return { lat: 0, lng: 0 }
+  if (!address || !AMAP_KEY) return { lat: 0, lng: 0 }
   try {
     const res = await fetch(
       `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=上海`
@@ -31,6 +32,9 @@ function str(v: unknown): string {
 
 // POST /api/drivers/import  — multipart form: file
 export async function POST(req: NextRequest) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   const formData = await req.formData()
   const file = formData.get("file") as File | null
   const importedBy = (formData.get("importedBy") as string) || "unknown"
@@ -40,11 +44,7 @@ export async function POST(req: NextRequest) {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer())
-  const workbook = XLSX.read(buffer, { type: "buffer" })
-  const sheet = workbook.Sheets[workbook.SheetNames[0]]
-
-  // 按行列索引读取（避免重复 header 互相覆盖）
-  const raw: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+  const raw = await parseXlsx(buffer)
 
   if (raw.length < 2) {
     return NextResponse.json({ error: "文件内容不足" }, { status: 400 })

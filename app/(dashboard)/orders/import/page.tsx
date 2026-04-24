@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import * as XLSX from "xlsx"
+import { parseXlsx } from "@/lib/excel-utils"
 import {
   Upload,
   FileSpreadsheet,
@@ -28,8 +28,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Progress } from "@/components/ui/progress"
 import { createOrder } from "@/lib/store"
 
-const AMAP_KEY = "4751969b1d68252aa828223bf04c3e3a"
-
 function extractCity(address: string): string {
   const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
   return m ? m[0].replace(/省|区|县/, "市") : "上海"
@@ -39,13 +37,11 @@ async function geocodeAddress(address: string): Promise<{ lat: number; lng: numb
   if (!address) return { lat: 0, lng: 0 }
   try {
     const city = extractCity(address)
-    const res = await fetch(
-      `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${AMAP_KEY}&city=${encodeURIComponent(city)}`
-    )
+    const res = await fetch(`/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`)
+    if (!res.ok) return { lat: 0, lng: 0 }
     const data = await res.json()
-    if (data.status === "1" && data.geocodes?.length > 0) {
-      const [lng, lat] = data.geocodes[0].location.split(",").map(Number)
-      return { lat, lng }
+    if (typeof data?.lat === "number" && typeof data?.lng === "number") {
+      return { lat: data.lat, lng: data.lng }
     }
   } catch {}
   return { lat: 0, lng: 0 }
@@ -140,10 +136,7 @@ export default function OrderImportPage() {
     setImportResult(null)
     try {
       const buffer = await f.arrayBuffer()
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: true })
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      // header: 1 返回二维数组
-      const rows: (string | number | boolean | Date)[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+      const rows = await parseXlsx(buffer)
 
       if (rows.length < 2) throw new Error("文件内容不足")
 

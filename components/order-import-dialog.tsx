@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useCallback, useRef } from "react"
-import * as XLSX from "xlsx"
+import { parseXlsx } from "@/lib/excel-utils"
 import {
   Dialog,
   DialogContent,
@@ -195,9 +195,7 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
     setResult(null)
     try {
       const buffer = await f.arrayBuffer()
-      const wb = XLSX.read(buffer, { type: "array", cellDates: true })
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" }) as (string | number | boolean | Date)[][]
+      const rows = await parseXlsx(buffer)
       if (rows.length < 2) return
 
       const headers = rows[0].map(h => String(h).trim())

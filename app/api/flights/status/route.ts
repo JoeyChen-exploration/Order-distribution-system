@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
+import { requireAuth } from "@/lib/auth-server"
 
 // AviationStack API key — set AVIATIONSTACK_API_KEY in .env.local
 // Free tier: 100 calls/month (http only). Paid plans support more calls.
 const API_KEY = process.env.AVIATIONSTACK_API_KEY || ""
 
 export async function GET(req: NextRequest) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   const { searchParams } = new URL(req.url)
   const flightNo = searchParams.get("flightNo")?.trim().toUpperCase()
   const date = searchParams.get("date") // YYYY-MM-DD

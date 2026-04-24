@@ -164,6 +164,7 @@ export async function login(username: string, password: string): Promise<User | 
 }
 
 export function logout(): void {
+  fetch("/api/users/logout", { method: "POST" }).catch(() => {})
   setCurrentUser(null)
 }
 
