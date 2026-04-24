@@ -302,7 +302,7 @@ export default function OrdersPage() {
   }
 
   const handleExport = async () => {
-    const XLSX = await import("xlsx")
+    const { Workbook } = await import("exceljs")
     const dispatched = orders
       .slice()
       .sort((a, b) => `${a.flightDate} ${a.pickupTime}`.localeCompare(`${b.flightDate} ${b.pickupTime}`))
@@ -344,10 +344,17 @@ export default function OrdersPage() {
       ]
     })
 
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, "礼宾车账单")
-    XLSX.writeFile(wb, `排单结果_${format(new Date(), "yyyyMMdd")}.xlsx`)
+    const workbook = new Workbook()
+    const worksheet = workbook.addWorksheet("礼宾车账单")
+    worksheet.addRows([headers, ...rows])
+    const buffer = await workbook.xlsx.writeBuffer()
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `排单结果_${format(new Date(), "yyyyMMdd")}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   const clearFilters = () => {

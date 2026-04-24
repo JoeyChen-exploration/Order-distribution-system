@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import * as XLSX from "xlsx"
+import { parseXlsx } from "@/lib/excel-utils"
 import {
   Upload,
   FileSpreadsheet,
@@ -136,10 +136,7 @@ export default function OrderImportPage() {
     setImportResult(null)
     try {
       const buffer = await f.arrayBuffer()
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: true })
-      const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      // header: 1 返回二维数组
-      const rows: (string | number | boolean | Date)[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+      const rows = await parseXlsx(buffer)
 
       if (rows.length < 2) throw new Error("文件内容不足")
 

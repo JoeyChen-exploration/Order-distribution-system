@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import * as XLSX from "xlsx"
+import { parseXlsx } from "@/lib/excel-utils"
 import { requireAuth } from "@/lib/auth-server"
 
 const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
@@ -44,11 +44,7 @@ export async function POST(req: NextRequest) {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer())
-  const workbook = XLSX.read(buffer, { type: "buffer" })
-  const sheet = workbook.Sheets[workbook.SheetNames[0]]
-
-  // 按行列索引读取（避免重复 header 互相覆盖）
-  const raw: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
+  const raw = await parseXlsx(buffer)
 
   if (raw.length < 2) {
     return NextResponse.json({ error: "文件内容不足" }, { status: 400 })
