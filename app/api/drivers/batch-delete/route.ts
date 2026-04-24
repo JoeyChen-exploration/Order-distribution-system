@@ -1,20 +1,38 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { requireAuth } from "@/lib/auth-server"
+import { batchDeleteSchema } from "@/lib/validation"
+import { writeAuditLog } from "@/lib/audit-log"
 
 // DELETE /api/drivers/batch-delete  body: { ids: string[] }
 export async function DELETE(req: NextRequest) {
-  const auth = requireAuth(req)
+  const auth = requireAuth(req, ["super_admin"])
   if (auth.error) return auth.error
 
   try {
-    const { ids } = await req.json() as { ids: string[] }
-    if (!Array.isArray(ids) || ids.length === 0) {
-      return NextResponse.json({ error: "No ids provided" }, { status: 400 })
+    const parsed = batchDeleteSchema.safeParse(await req.json())
+    if (!parsed.success) {
+      return NextResponse.json({ error: "请求参数无效", details: parsed.error.flatten() }, { status: 400 })
     }
+    const { ids } = parsed.data
     const result = await db.driver.deleteMany({ where: { id: { in: ids } } })
+    await writeAuditLog({
+      req,
+      session: auth.session,
+      action: "driver.batch_delete",
+      entity: "driver",
+      metadata: { requested: ids.length, deleted: result.count },
+    })
     return NextResponse.json({ success: true, deleted: result.count })
   } catch (e) {
+    await writeAuditLog({
+      req,
+      session: auth.session,
+      action: "driver.batch_delete",
+      entity: "driver",
+      status: "failed",
+      message: String(e),
+    })
     return NextResponse.json({ error: String(e) }, { status: 500 })
   }
 }

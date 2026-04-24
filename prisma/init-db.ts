@@ -85,6 +85,26 @@ async function initTables() {
       CONSTRAINT "Order_importBatchId_fkey" FOREIGN KEY ("importBatchId") REFERENCES "ImportBatch" ("id") ON DELETE SET NULL ON UPDATE CASCADE
     );
     CREATE UNIQUE INDEX IF NOT EXISTS "Order_orderNo_key" ON "Order"("orderNo");
+
+    CREATE TABLE IF NOT EXISTS "AuditLog" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "action" TEXT NOT NULL,
+      "entity" TEXT,
+      "entityId" TEXT,
+      "actorUserId" TEXT,
+      "actorUsername" TEXT,
+      "actorRole" TEXT,
+      "method" TEXT,
+      "path" TEXT,
+      "ip" TEXT,
+      "status" TEXT NOT NULL DEFAULT 'success',
+      "message" TEXT,
+      "metadata" TEXT,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS "AuditLog_createdAt_idx" ON "AuditLog"("createdAt");
+    CREATE INDEX IF NOT EXISTS "AuditLog_action_idx" ON "AuditLog"("action");
+    CREATE INDEX IF NOT EXISTS "AuditLog_actorUserId_idx" ON "AuditLog"("actorUserId");
   `)
   console.log("✓ 数据库表已创建")
 }

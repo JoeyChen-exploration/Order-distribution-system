@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { hashPassword, requireAuth } from "@/lib/auth-server"
 import { z } from "zod"
+import { writeAuditLog } from "@/lib/audit-log"
 
 const createUserSchema = z.object({
   username: z.string().trim().min(3).max(64),
@@ -41,6 +42,14 @@ export async function POST(req: NextRequest) {
       name: body.name,
     },
     select: { id: true, username: true, role: true, name: true, createdAt: true, updatedAt: true },
+  })
+  await writeAuditLog({
+    req,
+    session: auth.session,
+    action: "user.create",
+    entity: "user",
+    entityId: user.id,
+    metadata: { username: user.username, role: user.role },
   })
   return NextResponse.json(user, { status: 201 })
 }
