@@ -15,7 +15,7 @@ npm run dev
 
 | 层 | 技术 |
 |---|---|
-| 框架 | Next.js 14 App Router + TypeScript |
+| 框架 | Next.js 16 App Router + TypeScript |
 | UI | Tailwind CSS + shadcn/ui |
 | ORM | Prisma + LibSQL (SQLite) |
 | 地图 | 高德地图 REST API（地理编码 + 驾车路径规划） |
@@ -190,7 +190,7 @@ required = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
 ```
 ① 紧急订单按时间升序优先处理
 ↓
-② 并发预取所有「司机有效位置 → 订单上车点」路线
+② 预取「司机有效位置 → 订单上车点」路线
    （22 司机 × ~26 唯一上车点 ≈ 572 条，去重后并发请求）
    进度：预取路线数据 X / 572
 ↓
@@ -233,7 +233,7 @@ GET /api/maps/drivetime?originLng=&originLat=&destLng=&destLat=&pickupTime=HH:MM
 
 > ⚠️ haversine 回退路径**不叠加**交通系数（35 km/h 已是保守估算，防止双重惩罚）。
 
-**高德 QPS 限制**：免费 Web Service 账号 3次/秒。572 条路线并发触发限流时，超限的请求自动降级为 haversine 估算，派单功能不中断，但部分路线时间精度下降。如需稳定使用建议开通高德付费套餐（基础LBS服务 30元/万次，按 572次/批 = 约 0.17元/次批量派单）。
+**高德 QPS 限制**：当前项目按你的免费 Key 配额控制为 **3 次/秒**（以高德控制台实际配额为准）。代码侧在批量预取阶段使用 `QPS=3` 的并发窗口进行节流，目标是贴合免费额度并减少被限流概率。若仍发生限流，超限路线会回退到 haversine 估算，派单功能不中断，但部分路线时间精度下降。若后续你在控制台提升配额，可同步调整 `app/(dashboard)/dispatch/page.tsx` 中的 `QPS` 常量。
 
 ---
 
@@ -333,7 +333,7 @@ AVIATIONSTACK_API_KEY=你的密钥
 
 ## 数据导入说明
 
-### 订单（xlsx/csv）
+### 订单（xlsx）
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
@@ -346,7 +346,7 @@ AVIATIONSTACK_API_KEY=你的密钥
 | 航班号 | 推荐 | |
 | 人数 | 推荐 | |
 
-### 司机（xlsx/csv）
+### 司机（xlsx）
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
@@ -371,6 +371,7 @@ AVIATIONSTACK_API_KEY=你的密钥
 | 坐标缺失时距离权重失效 | 重新导入数据（geocoding 生效后）可解决 |
 | 工作时间为硬过滤 | 超出时段 1 分钟即排除，无缓冲区 |
 | 包车时长需手动确认 | 导入时无法从 Excel 自动读取时长，需在订单管理手动选择 4h/8h |
+| 导入当前以 xlsx 为准 | 前端可见 csv 入口，但解析器为 xlsx 实现，建议统一使用 xlsx |
 | 商务型自动归档 | Excel「商务型」自动归为普通商务型，可在订单管理蓝色提示条中逐条升级为豪华商务型 |
 | 司机车型为运营设置 | 司机导入时默认沿用 Excel 的车型，可在司机管理下拉菜单随时调整 |
 | 历史数据服务类型 key 为英文 | 早期导入的订单 metadata 存的是 `serviceType`，算法已兼容双 key 读取，重导入后统一为中文 key |
