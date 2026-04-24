@@ -1,5 +1,6 @@
 import { PrismaLibSql } from "@prisma/adapter-libsql"
 import { PrismaClient } from "../lib/generated/prisma/client"
+import { hashPassword } from "../lib/auth-server"
 
 const adapter = new PrismaLibSql({ url: "file:prisma/dev.db" })
 const db = new PrismaClient({ adapter } as ConstructorParameters<typeof PrismaClient>[0])
@@ -10,7 +11,7 @@ async function main() {
     update: {},
     create: {
       username: "admin",
-      password: "admin123",
+      password: hashPassword("admin123"),
       role: "super_admin",
       name: "超级管理员",
     },
@@ -21,7 +22,7 @@ async function main() {
     update: {},
     create: {
       username: "dispatcher",
-      password: "dispatch123",
+      password: hashPassword("dispatch123"),
       role: "dispatcher",
       name: "调度员",
     },

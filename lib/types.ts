@@ -2,7 +2,6 @@
 export interface User {
   id: string
   username: string
-  password: string // 实际使用时需要哈希
   role: 'super_admin' | 'dispatcher'
   name: string
   createdAt: string

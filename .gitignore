@@ -6,7 +6,13 @@ __v0_jsx-dev-runtime.ts
 # Common ignores
 node_modules/
 .next/
+.env
+.env.*
+!.env.example
 .env*.local
 .DS_Store
 /lib/generated/prisma
 .xlsx
+*.db
+*.sqlite
+*.sqlite3

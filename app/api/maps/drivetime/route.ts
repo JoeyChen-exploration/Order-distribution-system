@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
+import { requireAuth } from "@/lib/auth-server"
 
-const AMAP_KEY = process.env.AMAP_KEY || "4751969b1d68252aa828223bf04c3e3a"
+const AMAP_KEY = process.env.AMAP_KEY || ""
 
 /**
  * GET /api/maps/drivetime
@@ -12,6 +13,9 @@ const AMAP_KEY = process.env.AMAP_KEY || "4751969b1d68252aa828223bf04c3e3a"
  * Falls back to haversine + time-of-day traffic multiplier if API unavailable.
  */
 export async function GET(req: NextRequest) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   const { searchParams } = new URL(req.url)
   const originLng = parseFloat(searchParams.get("originLng") || "0")
   const originLat = parseFloat(searchParams.get("originLat") || "0")
@@ -24,7 +28,7 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 1. Try Amap driving direction API ──────────────────────────────────────
-  try {
+  if (AMAP_KEY) try {
     // Amap takes lng,lat order
     const url = `https://restapi.amap.com/v3/direction/driving` +
       `?origin=${originLng},${originLat}` +

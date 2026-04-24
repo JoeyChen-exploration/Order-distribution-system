@@ -108,7 +108,7 @@ export default function LoginPage() {
                 </div>
                 <div className="p-2 rounded bg-muted/50">
                   <p className="font-medium text-foreground">调度员</p>
-                  <p className="text-muted-foreground">dispatcher1 / dispatch123</p>
+                  <p className="text-muted-foreground">dispatcher / dispatch123</p>
                 </div>
               </div>
             </div>

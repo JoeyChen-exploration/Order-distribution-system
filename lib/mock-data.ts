@@ -5,7 +5,6 @@ export const DEFAULT_USERS: User[] = [
   {
     id: 'user-1',
     username: 'admin',
-    password: 'admin123', // 实际使用需要哈希
     role: 'super_admin',
     name: '系统管理员',
     createdAt: '2024-01-01T00:00:00Z',
@@ -14,7 +13,6 @@ export const DEFAULT_USERS: User[] = [
   {
     id: 'user-2',
     username: 'dispatcher1',
-    password: 'dispatch123',
     role: 'dispatcher',
     name: '调度员小王',
     createdAt: '2024-01-01T00:00:00Z',

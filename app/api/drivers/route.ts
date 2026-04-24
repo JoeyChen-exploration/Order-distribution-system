@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import { requireAuth } from "@/lib/auth-server"
 
 // GET /api/drivers
 export async function GET(req: NextRequest) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   try {
     const { searchParams } = new URL(req.url)
     const status = searchParams.get("status")
@@ -23,6 +27,9 @@ export async function GET(req: NextRequest) {
 
 // POST /api/drivers
 export async function POST(req: NextRequest) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   try {
     const body = await req.json()
     const driver = await db.driver.create({ data: body })

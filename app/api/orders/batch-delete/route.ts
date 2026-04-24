@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import { requireAuth } from "@/lib/auth-server"
 
 // DELETE /api/orders/batch-delete  body: { ids: string[] }
 export async function DELETE(req: NextRequest) {
+  const auth = requireAuth(req)
+  if (auth.error) return auth.error
+
   try {
     const { ids } = await req.json() as { ids: string[] }
     if (!Array.isArray(ids) || ids.length === 0) {

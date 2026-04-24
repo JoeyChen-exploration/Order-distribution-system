@@ -5,6 +5,7 @@
 import { createClient } from "@libsql/client"
 import { PrismaLibSql } from "@prisma/adapter-libsql"
 import { PrismaClient } from "../lib/generated/prisma/client"
+import { hashPassword } from "../lib/auth-server"
 
 const libsql = createClient({ url: "file:prisma/dev.db" })
 
@@ -96,12 +97,12 @@ async function seedData() {
   await db.user.upsert({
     where: { username: "admin" },
     update: {},
-    create: { username: "admin", password: "admin123", role: "super_admin", name: "超级管理员" },
+    create: { username: "admin", password: hashPassword("admin123"), role: "super_admin", name: "超级管理员" },
   })
   await db.user.upsert({
     where: { username: "dispatcher" },
     update: {},
-    create: { username: "dispatcher", password: "dispatch123", role: "dispatcher", name: "调度员" },
+    create: { username: "dispatcher", password: hashPassword("dispatch123"), role: "dispatcher", name: "调度员" },
   })
 
   console.log("✓ 默认用户已创建")
