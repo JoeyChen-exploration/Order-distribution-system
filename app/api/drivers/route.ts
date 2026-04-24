@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { requireAuth } from "@/lib/auth-server"
+import { createDriverSchema } from "@/lib/validation"
+import { writeAuditLog } from "@/lib/audit-log"
 
 // GET /api/drivers
 export async function GET(req: NextRequest) {
@@ -31,10 +33,30 @@ export async function POST(req: NextRequest) {
   if (auth.error) return auth.error
 
   try {
-    const body = await req.json()
+    const parsed = createDriverSchema.safeParse(await req.json())
+    if (!parsed.success) {
+      return NextResponse.json({ error: "请求参数无效", details: parsed.error.flatten() }, { status: 400 })
+    }
+    const body = parsed.data
     const driver = await db.driver.create({ data: body })
+    await writeAuditLog({
+      req,
+      session: auth.session,
+      action: "driver.create",
+      entity: "driver",
+      entityId: driver.id,
+      metadata: { name: driver.name, vehiclePlate: driver.vehiclePlate },
+    })
     return NextResponse.json(driver, { status: 201 })
   } catch (e) {
+    await writeAuditLog({
+      req,
+      session: auth.session,
+      action: "driver.create",
+      entity: "driver",
+      status: "failed",
+      message: String(e),
+    })
     return NextResponse.json({ error: String(e) }, { status: 500 })
   }
 }

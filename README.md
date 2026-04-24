@@ -20,7 +20,44 @@ npm run dev
 | ORM | Prisma + LibSQL (SQLite) |
 | 地图 | 高德地图 REST API（地理编码 + 驾车路径规划） |
 | 航班 | AviationStack REST API |
-| 文件解析 | xlsx (SheetJS) |
+| 文件解析 | exceljs |
+
+---
+
+## 安全机制（2026-04）
+
+### 1) 接口参数白名单（zod）
+
+所有核心写接口已启用严格白名单校验（`strict`）：
+- 订单：`POST /api/orders`、`PATCH /api/orders/:id`、`DELETE /api/orders/batch-delete`
+- 司机：`POST /api/drivers`、`PATCH /api/drivers/:id`、`DELETE /api/drivers/batch-delete`
+- 派单历史：`POST /api/dispatch-history`
+- 用户：`POST /api/users`、`POST /api/users/login`
+
+校验文件：`lib/validation.ts`
+
+### 2) 登录限流
+
+`POST /api/users/login` 已加入内存限流策略：
+- 维度：`IP + username`
+- 阈值：15 分钟内最多 8 次
+- 超限响应：`429` + `Retry-After`
+
+实现文件：`lib/rate-limit.ts`
+
+### 3) 审计日志（Audit Log）
+
+关键敏感操作会写入 `AuditLog` 表，包括：
+- 登录成功/失败/限流、退出登录
+- 用户创建
+- 订单创建/更新/删除/批量删除
+- 司机创建/更新/删除/批量删除/导入
+- 派单历史写入
+
+记录字段包含操作人、动作、资源、请求路径、IP、状态、时间、metadata。
+实现文件：`lib/audit-log.ts`
+
+> 新环境初始化：`npm run db:init` 会自动创建 `AuditLog` 表及索引。
 
 ---
 
@@ -219,10 +256,12 @@ GET https://restapi.amap.com/v3/geocode/geo?address=<地址>&key=<KEY>&city=<自
 
 **服务类型字段存储**：「服务类型」列以中文 key `服务类型` 存入 `metadata`，算法同时兼容老数据的英文 key `serviceType`。未被识别的类型值（如"点对点"）自动映射为"市内约车"。
 
-**API Key 位置**：
-- `components/order-import-dialog.tsx`
-- `app/api/drivers/import/route.ts`
-- `app/api/maps/drivetime/route.ts`
+**API Key 配置**（仅服务端环境变量）：
+- `AMAP_KEY`：地理编码 + 驾车时间
+- `AVIATIONSTACK_API_KEY`：航班状态查询
+- `AUTH_SESSION_SECRET`：登录会话签名密钥
+
+建议在 `.env.local` 或生产环境密钥管理系统配置，避免硬编码到前端代码。
 
 ---
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { parseXlsx } from "@/lib/excel-utils"
 import { requireAuth } from "@/lib/auth-server"
+import { writeAuditLog } from "@/lib/audit-log"
 
 const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
 const AMAP_KEY = process.env.AMAP_KEY || ""
@@ -37,10 +38,14 @@ export async function POST(req: NextRequest) {
 
   const formData = await req.formData()
   const file = formData.get("file") as File | null
-  const importedBy = (formData.get("importedBy") as string) || "unknown"
+  const importedByRaw = formData.get("importedBy")
+  const importedBy = typeof importedByRaw === "string" ? importedByRaw.trim().slice(0, 64) : "unknown"
 
   if (!file) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 })
+  }
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    return NextResponse.json({ error: "仅支持 .xlsx 文件" }, { status: 400 })
   }
 
   const buffer = Buffer.from(await file.arrayBuffer())
@@ -141,6 +146,20 @@ export async function POST(req: NextRequest) {
       errorRows: toUpsert.length - successRows,
       errors: JSON.stringify(errors),
       importedBy,
+    },
+  })
+
+  await writeAuditLog({
+    req,
+    session: auth.session,
+    action: "driver.import",
+    entity: "import_batch",
+    metadata: {
+      fileName: file.name,
+      importedBy,
+      totalRows: raw.length - 1,
+      successRows,
+      errorRows: toUpsert.length - successRows,
     },
   })
 
