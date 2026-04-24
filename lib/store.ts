@@ -78,24 +78,14 @@ export async function updateOrder(id: string, data: Partial<Order>): Promise<Ord
   return res.json()
 }
 
-export async function assignOrder(orderId: string, driverId: string, userId: string): Promise<Order | null> {
-  const driver = await getDriverById(driverId)
-  if (!driver) return null
-
-  const order = await updateOrder(orderId, {
-    status: 1,
-    driverId: driver.id,
-    driverName: driver.name,
-    modifiedUserId: userId,
-    modifiedAt: new Date().toISOString(),
+export async function assignOrder(orderId: string, driverId: string): Promise<Order | null> {
+  const res = await fetch("/api/orders/assign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId, driverId }),
   })
-
-  await updateDriver(driverId, {
-    dailyOrderCount: driver.dailyOrderCount + 1,
-    status: 'busy',
-  })
-
-  return order
+  if (!res.ok) return null
+  return res.json()
 }
 
 export async function deleteOrder(id: string): Promise<void> {

@@ -54,6 +54,10 @@ interface ParsedRow {
   isValid: boolean
 }
 
+function isXlsxFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".xlsx")
+}
+
 // 列名映射：中文表头 -> 字段名
 // 对应礼宾车账单 Excel 格式（列 A-AF）
 const fieldMapping: Record<string, string> = {
@@ -193,15 +197,25 @@ export default function OrderImportPage() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
-    if (f) { setFile(f); processFile(f) }
+    if (!f) return
+    if (!isXlsxFile(f)) {
+      alert("仅支持 .xlsx 文件")
+      return
+    }
+    setFile(f)
+    processFile(f)
   }
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     const f = e.dataTransfer.files[0]
-    if (f && (f.name.endsWith(".csv") || f.name.endsWith(".xlsx"))) {
-      setFile(f); processFile(f)
+    if (!f) return
+    if (!isXlsxFile(f)) {
+      alert("仅支持 .xlsx 文件")
+      return
     }
+    setFile(f)
+    processFile(f)
   }
 
   const handleImport = async () => {
@@ -267,7 +281,7 @@ export default function OrderImportPage() {
     setIsProcessing(false)
   }
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
     const headers = [
       "订单号", "预订车型", "服务类型", "服务城市", "服务日期",
       "三字码", "人数", "下单时间", "航班号", "上车点", "下车点", "车号",
@@ -286,11 +300,18 @@ export default function OrderImportPage() {
         "40", "CNY", "0", "0", "0", "0", "0", "0", "0", "0", "", "", "否", ""
       ],
     ]
-    const csv = [headers, ...sample].map(r => r.join(",")).join("\n")
-    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" })
+    const ExcelJS = (await import("exceljs")).default
+    const workbook = new ExcelJS.Workbook()
+    const worksheet = workbook.addWorksheet("礼宾车账单")
+    worksheet.addRow(headers)
+    sample.forEach((row) => worksheet.addRow(row))
+    const xlsxBuffer = await workbook.xlsx.writeBuffer()
+    const blob = new Blob([xlsxBuffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    })
     const a = document.createElement("a")
     a.href = URL.createObjectURL(blob)
-    a.download = "礼宾车账单导入模板.csv"
+    a.download = "礼宾车账单导入模板.xlsx"
     a.click()
   }
 
@@ -305,7 +326,7 @@ export default function OrderImportPage() {
         </Button>
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">导入订单</h1>
-          <p className="text-muted-foreground">批量导入礼宾车账单 CSV 格式的订单数据</p>
+          <p className="text-muted-foreground">批量导入礼宾车账单 XLSX 格式的订单数据</p>
         </div>
       </div>
 
@@ -326,7 +347,7 @@ export default function OrderImportPage() {
       <Card>
         <CardHeader>
           <CardTitle>上传文件</CardTitle>
-          <CardDescription>支持 CSV 格式文件，列格式参照礼宾车账单</CardDescription>
+          <CardDescription>仅支持 XLSX 格式文件，列格式参照礼宾车账单</CardDescription>
         </CardHeader>
         <CardContent>
           <div
@@ -336,7 +357,7 @@ export default function OrderImportPage() {
             onDragEnter={(e) => e.preventDefault()}
             onClick={() => document.getElementById("file-input")?.click()}
           >
-            <input id="file-input" type="file" accept=".csv,.xlsx" className="hidden" onChange={handleFileChange} />
+            <input id="file-input" type="file" accept=".xlsx" className="hidden" onChange={handleFileChange} />
             {file ? (
               <div className="flex items-center justify-center gap-3">
                 <FileSpreadsheet className="h-10 w-10 text-primary" />
@@ -352,7 +373,7 @@ export default function OrderImportPage() {
               <>
                 <Upload className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
                 <p className="text-lg font-medium mb-1">点击或拖拽文件到此处</p>
-                <p className="text-sm text-muted-foreground">支持 CSV 格式</p>
+                <p className="text-sm text-muted-foreground">仅支持 XLSX 格式</p>
               </>
             )}
           </div>
