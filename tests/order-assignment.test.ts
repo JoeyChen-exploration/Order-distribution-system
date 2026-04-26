@@ -29,7 +29,7 @@ function buildTx(overrides?: Partial<any>) {
   return { tx, calls }
 }
 
-test("assignOrderWithTx: rejects non-future order", async () => {
+test("assignOrderWithTx: allows single assignment even for non-future order", async () => {
   const today = new Date()
   const d = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`
 
@@ -60,10 +60,7 @@ test("assignOrderWithTx: rejects non-future order", async () => {
     driverId: "d1",
     actorUserId: "u1",
   })
-  assert.equal(result.ok, false)
-  if (!result.ok) {
-    assert.equal(result.code, "ORDER_NOT_FUTURE")
-  }
+  assert.equal(result.ok, true)
 })
 
 test("assignOrderWithTx: idempotent when already assigned to same driver", async () => {

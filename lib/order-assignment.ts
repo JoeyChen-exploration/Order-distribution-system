@@ -11,15 +11,7 @@ type TxClient = {
 
 export type AssignOrderResult =
   | { ok: true; updatedOrder: any; previousDriverId: string | null; idempotent: boolean }
-  | { ok: false; code: "ORDER_NOT_FOUND" | "DRIVER_NOT_FOUND" | "ORDER_NOT_ASSIGNABLE" | "DRIVER_NOT_AVAILABLE" | "ORDER_NOT_FUTURE"; message: string }
-
-function todayDateStr() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, "0")
-  const d = String(now.getDate()).padStart(2, "0")
-  return `${y}-${m}-${d}`
-}
+  | { ok: false; code: "ORDER_NOT_FOUND" | "DRIVER_NOT_FOUND" | "ORDER_NOT_ASSIGNABLE" | "DRIVER_NOT_AVAILABLE"; message: string }
 
 export async function assignOrderWithTx(
   tx: TxClient,
@@ -32,9 +24,6 @@ export async function assignOrderWithTx(
 
   if (!order) return { ok: false, code: "ORDER_NOT_FOUND", message: "订单不存在" }
   if (!driver) return { ok: false, code: "DRIVER_NOT_FOUND", message: "司机不存在" }
-  if (order.flightDate <= todayDateStr()) {
-    return { ok: false, code: "ORDER_NOT_FUTURE", message: "仅允许派送 T+1 及以后订单" }
-  }
   if (order.status === 3 || order.status === 4 || order.status === 5) {
     return { ok: false, code: "ORDER_NOT_ASSIGNABLE", message: "当前订单状态不可派单" }
   }

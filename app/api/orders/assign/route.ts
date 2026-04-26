@@ -39,7 +39,6 @@ export async function POST(req: NextRequest) {
         DRIVER_NOT_FOUND: { status: 404, code: "NOT_FOUND" as const },
         ORDER_NOT_ASSIGNABLE: { status: 409, code: "CONFLICT" as const },
         DRIVER_NOT_AVAILABLE: { status: 409, code: "CONFLICT" as const },
-        ORDER_NOT_FUTURE: { status: 409, code: "CONFLICT" as const },
       }
       const hit = map[result.code]
       return errorWithRequestId({
