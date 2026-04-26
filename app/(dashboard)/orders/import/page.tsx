@@ -115,6 +115,7 @@ export default function OrderImportPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [importProgress, setImportProgress] = useState(0)
   const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null)
+  const [importErrors, setImportErrors] = useState<string[]>([])
 
   const validateRow = (data: Record<string, string | number | boolean>, rowIndex: number): ParsedRow => {
     const errors: string[] = []
@@ -138,6 +139,7 @@ export default function OrderImportPage() {
   const processFile = useCallback(async (f: File) => {
     setIsProcessing(true)
     setImportResult(null)
+    setImportErrors([])
     try {
       const buffer = await f.arrayBuffer()
       const rows = await parseXlsx(buffer)
@@ -223,9 +225,11 @@ export default function OrderImportPage() {
     if (valid.length === 0) return
     setIsProcessing(true)
     setImportProgress(0)
+    setImportErrors([])
 
     let success = 0
     let failed = 0
+    const failedMessages: string[] = []
 
     const CORE_FIELDS = new Set([
       "orderNo", "reqVehicleType", "flightDate", "flightNo",
@@ -250,7 +254,7 @@ export default function OrderImportPage() {
           geocodeAddress(pickupAddr),
           geocodeAddress(dropoffAddr),
         ])
-        await createOrder({
+        const created = await createOrder({
           orderNo: String(d.orderNo || `IMP-${Date.now()}-${i}`),
           passengerName: String(d.passengerName || ""),
           passengerPhone: String(d.passengerPhone || ""),
@@ -270,14 +274,22 @@ export default function OrderImportPage() {
           importBatchId: null,
           metadata: Object.keys(extra).length > 0 ? JSON.stringify(extra) : undefined,
         })
+        if (!created || typeof created !== "object" || !("id" in created)) {
+          const maybeError = (created as { error?: { message?: string } })?.error?.message
+          throw new Error(maybeError || "接口未返回有效订单数据")
+        }
         success++
-      } catch {
+      } catch (e) {
         failed++
+        const msg = e instanceof Error ? e.message : String(e)
+        const orderNo = String(valid[i]?.data?.orderNo || `row-${valid[i]?.rowIndex ?? i + 1}`)
+        failedMessages.push(`${orderNo}: ${msg}`)
       }
       setImportProgress(Math.round(((i + 1) / valid.length) * 100))
     }
 
     setImportResult({ success, failed })
+    setImportErrors(failedMessages)
     setIsProcessing(false)
   }
 
@@ -341,6 +353,16 @@ export default function OrderImportPage() {
             <Button size="sm" onClick={() => router.push("/orders")}>查看订单列表</Button>
             <Button size="sm" variant="outline" onClick={() => router.push("/dispatch")}>前往派单</Button>
           </div>
+          {importErrors.length > 0 && (
+            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 p-3">
+              <p className="text-sm font-medium mb-2">失败详情（最多展示 10 条）</p>
+              <ul className="text-xs space-y-1 max-h-40 overflow-auto">
+                {importErrors.slice(0, 10).map((line, idx) => (
+                  <li key={`${idx}-${line}`}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Alert>
       )}
 

@@ -8,6 +8,39 @@ import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-r
 const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
 const AMAP_KEY = process.env.AMAP_KEY || ""
 
+let ensureDriverSchemaPromise: Promise<void> | null = null
+
+async function ensureDriverSchema() {
+  if (ensureDriverSchemaPromise) return ensureDriverSchemaPromise
+  ensureDriverSchemaPromise = (async () => {
+    await db.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Driver" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "phone" TEXT NOT NULL,
+        "vehicleType" TEXT NOT NULL,
+        "vehiclePlate" TEXT NOT NULL,
+        "homeAddress" TEXT NOT NULL DEFAULT '',
+        "homeLat" REAL NOT NULL DEFAULT 0,
+        "homeLng" REAL NOT NULL DEFAULT 0,
+        "status" TEXT NOT NULL DEFAULT 'available',
+        "dailyOrderCount" INTEGER NOT NULL DEFAULT 0,
+        "currentLat" REAL,
+        "currentLng" REAL,
+        "workingHours" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `)
+    const cols = await db.$queryRawUnsafe<Array<{ name: string }>>(`PRAGMA table_info("Driver")`)
+    const names = cols.map((c) => c.name)
+    if (!names.includes("workingHours")) {
+      await db.$executeRawUnsafe(`ALTER TABLE "Driver" ADD COLUMN "workingHours" TEXT`)
+    }
+  })()
+  return ensureDriverSchemaPromise
+}
+
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
   if (!address || !AMAP_KEY) return { lat: 0, lng: 0 }
   try {
@@ -37,6 +70,7 @@ export async function POST(req: NextRequest) {
   const requestId = getRequestId(req)
   const auth = requireAuth(req)
   if (auth.error) return auth.error
+  await ensureDriverSchema()
 
   const formData = await req.formData()
   const file = formData.get("file") as File | null

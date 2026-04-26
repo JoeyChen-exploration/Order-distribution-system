@@ -124,6 +124,14 @@ async function initTables() {
     );
     CREATE INDEX IF NOT EXISTS "LoginRateLimit_bucketKey_createdAt_idx" ON "LoginRateLimit"("bucketKey", "createdAt");
   `)
+
+  // 兼容旧库：补齐 Driver.workingHours 列（旧表可能缺失该列）
+  const driverCols = await libsql.execute(`PRAGMA table_info("Driver")`)
+  const colNames = (driverCols.rows || []).map((r: Record<string, unknown>) => String(r.name))
+  if (!colNames.includes("workingHours")) {
+    await libsql.execute(`ALTER TABLE "Driver" ADD COLUMN "workingHours" TEXT`)
+  }
+
   console.log("✓ 数据库表已创建")
 }
 
