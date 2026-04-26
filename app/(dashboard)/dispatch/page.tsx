@@ -61,14 +61,6 @@ const serviceTypeConfig: Record<string, { border: string; text: string; bg: stri
 
 const DISPATCH_COORD_POLICY = (process.env.NEXT_PUBLIC_DISPATCH_COORD_POLICY || "warn").toLowerCase()
 
-function todayDateStr() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, "0")
-  const d = String(now.getDate()).padStart(2, "0")
-  return `${y}-${m}-${d}`
-}
-
 function extractCity(address: string): string {
   const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
   return m ? m[0].replace(/省|区|县/, "市") : "上海"
@@ -362,18 +354,6 @@ export default function DispatchPage() {
       badCoordSelected.forEach((o) => remaining.delete(o.id))
       setSelectedOrders(remaining)
       alert(`已将 ${badCoordSelected.length} 条坏坐标订单自动置为空单，不参与分配。`)
-      return
-    }
-
-    // P0 规则：批量派单仅允许 T+1 及以后订单
-    const today = todayDateStr()
-    const notFutureOrders = dispatchableOrders.filter((o) => o.flightDate <= today)
-    if (notFutureOrders.length > 0) {
-      alert(
-        `批量派单仅允许未来订单（T+1及以后）。以下订单日期不满足要求：\n${notFutureOrders
-          .map((o) => `${o.orderNo} (${o.flightDate})`)
-          .join("\n")}`,
-      )
       return
     }
 

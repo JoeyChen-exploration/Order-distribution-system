@@ -15,14 +15,6 @@ type ItemResult = {
   errorMessage?: string
 }
 
-function todayDateStr() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, "0")
-  const d = String(now.getDate()).padStart(2, "0")
-  return `${y}-${m}-${d}`
-}
-
 export async function POST(req: NextRequest) {
   const requestId = getRequestId(req)
   const auth = requireAuth(req)
@@ -64,18 +56,6 @@ export async function POST(req: NextRequest) {
       })
       continue
     }
-    if (orderDate.flightDate <= todayDateStr()) {
-      results.push({
-        orderId: item.orderId,
-        driverId: item.driverId,
-        ok: false,
-        retries: 0,
-        errorCode: "ORDER_NOT_FUTURE",
-        errorMessage: "仅允许批量派送 T+1 及以后订单",
-      })
-      continue
-    }
-
     let attempt = 0
     let done = false
     while (attempt < maxAttempts && !done) {
