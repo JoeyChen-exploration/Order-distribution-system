@@ -91,6 +91,7 @@ async function initTables() {
       "driverName" TEXT,
       "modifiedUserId" TEXT,
       "importBatchId" TEXT,
+      "metadata" TEXT,
       CONSTRAINT "Order_driverId_fkey" FOREIGN KEY ("driverId") REFERENCES "Driver" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
       CONSTRAINT "Order_modifiedUserId_fkey" FOREIGN KEY ("modifiedUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
       CONSTRAINT "Order_importBatchId_fkey" FOREIGN KEY ("importBatchId") REFERENCES "ImportBatch" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -130,6 +131,13 @@ async function initTables() {
   const colNames = (driverCols.rows || []).map((r: Record<string, unknown>) => String(r.name))
   if (!colNames.includes("workingHours")) {
     await libsql.execute(`ALTER TABLE "Driver" ADD COLUMN "workingHours" TEXT`)
+  }
+
+  // 兼容旧库：补齐 Order.metadata 列（旧表可能缺失该列）
+  const orderCols = await libsql.execute(`PRAGMA table_info("Order")`)
+  const orderColNames = (orderCols.rows || []).map((r: Record<string, unknown>) => String(r.name))
+  if (!orderColNames.includes("metadata")) {
+    await libsql.execute(`ALTER TABLE "Order" ADD COLUMN "metadata" TEXT`)
   }
 
   console.log("✓ 数据库表已创建")

@@ -6,10 +6,55 @@ import { writeAuditLog } from "@/lib/audit-log"
 import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 import { normalizeOrderPayload } from "@/lib/order-consistency"
 
+let ensureOrderSchemaPromise: Promise<void> | null = null
+
+async function ensureOrderSchema() {
+  if (ensureOrderSchemaPromise) return ensureOrderSchemaPromise
+  ensureOrderSchemaPromise = (async () => {
+    await db.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Order" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "orderNo" TEXT NOT NULL,
+        "passengerName" TEXT NOT NULL,
+        "passengerPhone" TEXT NOT NULL,
+        "flightNo" TEXT NOT NULL,
+        "flightDate" TEXT NOT NULL,
+        "pickupTime" TEXT NOT NULL,
+        "pickupAddress" TEXT NOT NULL,
+        "pickupLat" REAL NOT NULL DEFAULT 0,
+        "pickupLng" REAL NOT NULL DEFAULT 0,
+        "dropoffAddress" TEXT NOT NULL,
+        "dropoffLat" REAL NOT NULL DEFAULT 0,
+        "dropoffLng" REAL NOT NULL DEFAULT 0,
+        "reqVehicleType" TEXT NOT NULL,
+        "status" INTEGER NOT NULL DEFAULT 0,
+        "isEmergency" BOOLEAN NOT NULL DEFAULT false,
+        "cancelReason" TEXT,
+        "cancelTime" TEXT,
+        "modifiedAt" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "driverId" TEXT,
+        "driverName" TEXT,
+        "modifiedUserId" TEXT,
+        "importBatchId" TEXT,
+        "metadata" TEXT
+      );
+    `)
+    const cols = await db.$queryRawUnsafe<Array<{ name: string }>>(`PRAGMA table_info("Order")`)
+    const names = cols.map((c) => c.name)
+    if (!names.includes("metadata")) {
+      await db.$executeRawUnsafe(`ALTER TABLE "Order" ADD COLUMN "metadata" TEXT`)
+    }
+  })()
+  return ensureOrderSchemaPromise
+}
+
 // GET /api/orders
 export async function GET(req: NextRequest) {
   const auth = requireAuth(req)
   if (auth.error) return auth.error
+  await ensureOrderSchema()
 
   const { searchParams } = new URL(req.url)
   const status = searchParams.get("status")
@@ -27,6 +72,7 @@ export async function POST(req: NextRequest) {
   const requestId = getRequestId(req)
   const auth = requireAuth(req)
   if (auth.error) return auth.error
+  await ensureOrderSchema()
 
   const parsed = createOrderSchema.safeParse(await req.json())
   if (!parsed.success) {
