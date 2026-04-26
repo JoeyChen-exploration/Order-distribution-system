@@ -47,7 +47,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils"
 import { format } from "date-fns"
 import { zhCN } from "date-fns/locale"
-import { getOrders, getDrivers, updateOrder, updateDriver } from "@/lib/store"
+import { assignOrder, getOrders, getDrivers, updateOrder } from "@/lib/store"
 import { runDispatchAlgorithm, batchDispatch, type DispatchResult, type TravelTimeCache } from "@/lib/dispatch-engine"
 import type { Order, Driver } from "@/lib/types"
 import { VEHICLE_TYPE_COLORS, VEHICLE_TYPE_OPTIONS } from "@/lib/types"
@@ -411,8 +411,11 @@ export default function DispatchPage() {
   }
 
   const handleConfirmDispatch = async (orderId: string, driverId: string) => {
-    await updateDriver(driverId, { status: "busy" })
-    await updateOrder(orderId, { driverId, status: 1 })
+    const assigned = await assignOrder(orderId, driverId)
+    if (!assigned) {
+      alert("派单失败，请刷新后重试")
+      return
+    }
 
     const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
     setAllOrders(orders)
@@ -493,8 +496,7 @@ export default function DispatchPage() {
     setBatchMode(false)
     setSelectedOrders(new Set())
     for (const { orderId, driverId } of toDispatch) {
-      await updateDriver(driverId, { status: "busy" })
-      await updateOrder(orderId, { driverId, status: 1 })
+      await assignOrder(orderId, driverId)
     }
     const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
     setAllOrders(orders)

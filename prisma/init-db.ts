@@ -6,8 +6,10 @@ import { createClient } from "@libsql/client"
 import { PrismaLibSql } from "@prisma/adapter-libsql"
 import { PrismaClient } from "../lib/generated/prisma/client"
 import { hashPassword } from "../lib/auth-server"
+import { getDatabaseUrl } from "../lib/database-url"
 
-const libsql = createClient({ url: "file:prisma/dev.db" })
+const dbUrl = getDatabaseUrl()
+const libsql = createClient({ url: dbUrl })
 
 // 1. 直接用 libsql 建表（绕过 Prisma migrate 问题）
 async function initTables() {
@@ -111,7 +113,7 @@ async function initTables() {
 
 // 2. 用 Prisma Client 写入默认数据
 async function seedData() {
-  const adapter = new PrismaLibSql({ url: "file:prisma/dev.db" })
+  const adapter = new PrismaLibSql({ url: dbUrl })
   const db = new PrismaClient({ adapter } as ConstructorParameters<typeof PrismaClient>[0])
 
   await db.user.upsert({

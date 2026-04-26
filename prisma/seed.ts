@@ -1,8 +1,9 @@
 import { PrismaLibSql } from "@prisma/adapter-libsql"
 import { PrismaClient } from "../lib/generated/prisma/client"
 import { hashPassword } from "../lib/auth-server"
+import { getDatabaseUrl } from "../lib/database-url"
 
-const adapter = new PrismaLibSql({ url: "file:prisma/dev.db" })
+const adapter = new PrismaLibSql({ url: getDatabaseUrl() })
 const db = new PrismaClient({ adapter } as ConstructorParameters<typeof PrismaClient>[0])
 
 async function main() {

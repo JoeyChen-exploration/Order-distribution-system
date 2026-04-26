@@ -35,7 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { getOrderById, getDrivers, updateOrder, updateDriver } from "@/lib/store"
+import { assignOrder, getOrderById, getDrivers, updateOrder, updateDriver } from "@/lib/store"
 import type { Order, Driver, OrderStatus } from "@/lib/types"
 import { ORDER_STATUS_LABELS, ORDER_STATUS_COLORS, VEHICLE_TYPE_LABELS } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -85,14 +85,11 @@ export default function OrderDetailPage({ params }: { params: Promise<{ id: stri
 
   const handleReassign = async () => {
     if (!selectedDriverId) return
-    if (order.driverId) {
-      await updateDriver(order.driverId, { status: "available" })
+    const assigned = await assignOrder(order.id, selectedDriverId)
+    if (!assigned) {
+      alert("改派失败，请刷新后重试")
+      return
     }
-    await updateDriver(selectedDriverId, { status: "busy" })
-    await updateOrder(order.id, {
-      driverId: selectedDriverId,
-      status: order.status === 0 ? 1 : order.status,
-    })
     await loadData()
     setShowReassignDialog(false)
     setSelectedDriverId("")

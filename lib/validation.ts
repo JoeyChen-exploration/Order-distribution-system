@@ -52,6 +52,11 @@ export const createOrderSchema = z.object({
 
 export const updateOrderSchema = createOrderSchema.partial().strict()
 
+export const assignOrderSchema = z.object({
+  orderId: z.string().trim().min(1),
+  driverId: z.string().trim().min(1),
+}).strict()
+
 export const createDispatchHistorySchema = z.object({
   totalOrders: z.number().int().min(0).max(100000),
   matched: z.number().int().min(0).max(100000),

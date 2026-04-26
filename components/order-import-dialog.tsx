@@ -140,6 +140,10 @@ interface ParsedRow {
   isValid: boolean
 }
 
+function isXlsxFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".xlsx")
+}
+
 function validateRow(data: Record<string, string | number | boolean>, rowIndex: number): ParsedRow {
   const errors: string[] = []
   if (!data.orderNo) errors.push("缺少订单号")
@@ -237,6 +241,10 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
   }, [])
 
   const handleFileSelect = (f: File) => {
+    if (!isXlsxFile(f)) {
+      alert("仅支持 .xlsx 文件")
+      return
+    }
     setFile(f)
     processFile(f)
   }
@@ -372,7 +380,7 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv,.xlsx"
+                  accept=".xlsx"
                   className="hidden"
                   onChange={e => { const f = e.target.files?.[0]; if (f) handleFileSelect(f) }}
                 />
@@ -390,7 +398,7 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
                 ) : (
                   <>
                     <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">点击或拖拽 CSV / XLSX 文件到此处</p>
+                    <p className="text-sm text-muted-foreground">点击或拖拽 XLSX 文件到此处</p>
                   </>
                 )}
               </div>
