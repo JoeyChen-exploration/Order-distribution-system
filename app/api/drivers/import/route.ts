@@ -3,6 +3,7 @@ import { db } from "@/lib/db"
 import { parseXlsx } from "@/lib/excel-utils"
 import { requireAuth } from "@/lib/auth-server"
 import { writeAuditLog } from "@/lib/audit-log"
+import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 
 const VALID_VEHICLE_TYPES = ["豪华商务型", "普通商务型", "舒适型", "豪华型", "商务型", "经济型"]
 const AMAP_KEY = process.env.AMAP_KEY || ""
@@ -33,6 +34,7 @@ function str(v: unknown): string {
 
 // POST /api/drivers/import  — multipart form: file
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req)
   const auth = requireAuth(req)
   if (auth.error) return auth.error
 
@@ -42,17 +44,32 @@ export async function POST(req: NextRequest) {
   const importedBy = typeof importedByRaw === "string" ? importedByRaw.trim().slice(0, 64) : "unknown"
 
   if (!file) {
-    return NextResponse.json({ error: "No file provided" }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "BAD_REQUEST",
+      message: "No file provided",
+    })
   }
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
-    return NextResponse.json({ error: "仅支持 .xlsx 文件" }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "BAD_REQUEST",
+      message: "仅支持 .xlsx 文件",
+    })
   }
 
   const buffer = Buffer.from(await file.arrayBuffer())
   const raw = await parseXlsx(buffer)
 
   if (raw.length < 2) {
-    return NextResponse.json({ error: "文件内容不足" }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "BAD_REQUEST",
+      message: "文件内容不足",
+    })
   }
 
   // 第一行是表头，找到各列的位置
@@ -160,14 +177,15 @@ export async function POST(req: NextRequest) {
       totalRows: raw.length - 1,
       successRows,
       errorRows: toUpsert.length - successRows,
+      requestId,
     },
   })
 
-  return NextResponse.json({
+  return jsonWithRequestId({
     success: true,
     successRows,
     errorRows: toUpsert.length - successRows,
     errors,
     detectedHeaders: headerRow,
-  })
+  }, requestId)
 }

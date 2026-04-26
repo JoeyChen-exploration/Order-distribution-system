@@ -3,6 +3,7 @@ import { db } from "@/lib/db"
 import { requireAuth } from "@/lib/auth-server"
 import { updateDriverSchema } from "@/lib/validation"
 import { writeAuditLog } from "@/lib/audit-log"
+import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 
 // GET /api/drivers/:id
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -17,13 +18,20 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 // PATCH /api/drivers/:id
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const requestId = getRequestId(req)
   const auth = requireAuth(req)
   if (auth.error) return auth.error
 
   const { id } = await params
   const parsed = updateDriverSchema.safeParse(await req.json())
   if (!parsed.success) {
-    return NextResponse.json({ error: "请求参数无效", details: parsed.error.flatten() }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "请求参数无效",
+      details: parsed.error.flatten(),
+    })
   }
   const body = parsed.data
   const driver = await db.driver.update({ where: { id }, data: body })
@@ -33,13 +41,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     action: "driver.update",
     entity: "driver",
     entityId: id,
-    metadata: { changedFields: Object.keys(body), name: driver.name },
+    metadata: { changedFields: Object.keys(body), name: driver.name, requestId },
   })
-  return NextResponse.json(driver)
+  return jsonWithRequestId(driver, requestId)
 }
 
 // DELETE /api/drivers/:id
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const requestId = getRequestId(_req)
   const auth = requireAuth(_req)
   if (auth.error) return auth.error
 
@@ -53,9 +62,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       action: "driver.delete",
       entity: "driver",
       entityId: id,
-      metadata: old ?? null,
+      metadata: { ...(old ?? {}), requestId },
     })
-    return NextResponse.json({ success: true })
+    return jsonWithRequestId({ success: true }, requestId)
   } catch (e) {
     await writeAuditLog({
       req: _req,
@@ -65,7 +74,13 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
       entityId: id,
       status: "failed",
       message: String(e),
+      metadata: { requestId },
     })
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return errorWithRequestId({
+      requestId,
+      status: 500,
+      code: "INTERNAL_ERROR",
+      message: String(e),
+    })
   }
 }

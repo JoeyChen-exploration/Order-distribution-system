@@ -47,7 +47,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils"
 import { format } from "date-fns"
 import { zhCN } from "date-fns/locale"
-import { assignOrder, getOrders, getDrivers, updateOrder } from "@/lib/store"
+import { assignOrder, assignOrdersBatch, getOrders, getDrivers, updateOrder } from "@/lib/store"
 import { runDispatchAlgorithm, batchDispatch, type DispatchResult, type TravelTimeCache } from "@/lib/dispatch-engine"
 import type { Order, Driver } from "@/lib/types"
 import { VEHICLE_TYPE_COLORS, VEHICLE_TYPE_OPTIONS } from "@/lib/types"
@@ -57,6 +57,16 @@ const serviceTypeConfig: Record<string, { border: string; text: string; bg: stri
   "送机/站": { border: "border-amber-500",   text: "text-amber-400",   bg: "bg-amber-500/10" },
   "包车":    { border: "border-emerald-500", text: "text-emerald-400", bg: "bg-emerald-500/10" },
   "市内约车": { border: "border-violet-500",  text: "text-violet-400",  bg: "bg-violet-500/10" },
+}
+
+const DISPATCH_COORD_POLICY = (process.env.NEXT_PUBLIC_DISPATCH_COORD_POLICY || "warn").toLowerCase()
+
+function todayDateStr() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, "0")
+  const d = String(now.getDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
 }
 
 function extractCity(address: string): string {
@@ -327,6 +337,18 @@ export default function DispatchPage() {
 
     const ordersToDispatch = filteredOrders.filter(o => selectedOrders.has(o.id))
 
+    // P0 规则：批量派单仅允许 T+1 及以后订单
+    const today = todayDateStr()
+    const notFutureOrders = ordersToDispatch.filter((o) => o.flightDate <= today)
+    if (notFutureOrders.length > 0) {
+      alert(
+        `批量派单仅允许未来订单（T+1及以后）。以下订单日期不满足要求：\n${notFutureOrders
+          .map((o) => `${o.orderNo} (${o.flightDate})`)
+          .join("\n")}`,
+      )
+      return
+    }
+
     // 检查包车时长未确认的订单
     const unconfirmedCharter = ordersToDispatch.filter(o => {
       try { const m = JSON.parse(o.metadata || "{}"); return (m["服务类型"] === "包车" || m.serviceType === "包车") && !m["包车时长"] } catch { return false }
@@ -334,6 +356,19 @@ export default function DispatchPage() {
     if (unconfirmedCharter.length > 0) {
       alert(`以下包车订单未确认时长，请先在订单管理中完成选择后再派单：\n${unconfirmedCharter.map(o => o.orderNo).join("\n")}`)
       return
+    }
+
+    if (DISPATCH_COORD_POLICY === "block") {
+      const missingOrderCoords = ordersToDispatch.filter(
+        (o) => !o.pickupLat || !o.pickupLng || !o.dropoffLat || !o.dropoffLng,
+      )
+      const missingDriverCoords = drivers.filter((d) => !d.homeLat || !d.homeLng)
+      if (missingOrderCoords.length > 0 || missingDriverCoords.length > 0) {
+        alert(
+          `当前坐标策略为 block，存在缺失坐标数据，已阻断批量派单。\n缺坐标订单：${missingOrderCoords.length} 条\n缺坐标司机：${missingDriverCoords.length} 位`,
+        )
+        return
+      }
     }
 
     cancelledRef.current = false
@@ -495,8 +530,21 @@ export default function DispatchPage() {
     setBatchResults(null)
     setBatchMode(false)
     setSelectedOrders(new Set())
-    for (const { orderId, driverId } of toDispatch) {
-      await assignOrder(orderId, driverId)
+    const batchResponse = await assignOrdersBatch(
+      toDispatch,
+      `dispatch-${Date.now()}`,
+    )
+    if (!batchResponse) {
+      alert("批量确认派单失败，请刷新后重试")
+      return
+    }
+    if (batchResponse.failedCount > 0) {
+      const failedItems = (batchResponse.results || [])
+        .filter((r: { ok: boolean }) => !r.ok)
+        .slice(0, 8)
+        .map((r: { orderId: string; errorCode?: string }) => `${r.orderId} (${r.errorCode || "FAILED"})`)
+        .join("\n")
+      alert(`批量确认部分失败：${batchResponse.failedCount} 条\n${failedItems}`)
     }
     const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
     setAllOrders(orders)

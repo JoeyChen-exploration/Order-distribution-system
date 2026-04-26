@@ -3,6 +3,7 @@ import { db } from "@/lib/db"
 import { hashPassword, requireAuth } from "@/lib/auth-server"
 import { z } from "zod"
 import { writeAuditLog } from "@/lib/audit-log"
+import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 
 const createUserSchema = z.object({
   username: z.string().trim().min(3).max(64),
@@ -25,12 +26,18 @@ export async function GET(req: NextRequest) {
 
 // POST /api/users
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req)
   const auth = requireAuth(req, ["super_admin"])
   if (auth.error) return auth.error
 
   const parsed = createUserSchema.safeParse(await req.json())
   if (!parsed.success) {
-    return NextResponse.json({ error: "请求参数无效" }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "请求参数无效",
+    })
   }
 
   const body = parsed.data
@@ -49,7 +56,7 @@ export async function POST(req: NextRequest) {
     action: "user.create",
     entity: "user",
     entityId: user.id,
-    metadata: { username: user.username, role: user.role },
+    metadata: { username: user.username, role: user.role, requestId },
   })
-  return NextResponse.json(user, { status: 201 })
+  return jsonWithRequestId(user, requestId, 201)
 }

@@ -40,12 +40,12 @@ npm run dev
 
 ### 2) 登录限流
 
-`POST /api/users/login` 已加入内存限流策略：
+`POST /api/users/login` 已加入**数据库持久化限流**策略（`LoginRateLimit`）：
 - 维度：`IP + username`
 - 阈值：15 分钟内最多 8 次
 - 超限响应：`429` + `Retry-After`
 
-实现文件：`lib/rate-limit.ts`
+实现文件：`lib/login-rate-limit.ts`
 
 ### 3) 审计日志（Audit Log）
 
@@ -89,6 +89,55 @@ file:./prisma/dev.db
 
 ---
 
+## P0 收敛更新（2026-04-26）
+
+### 1) 批量派单仅允许未来订单（T+1）
+
+- 前端批量派单会阻断 `flightDate <= 今天` 的订单。
+- 后端派单接口（单条/批量）也做同样校验，防止绕过前端。
+
+### 2) 批量确认派单重试 + 幂等
+
+- 新增 `POST /api/orders/assign-batch`：
+  - 批量按 `orderId` 去重；
+  - 单条失败自动最多重试 3 次；
+  - 返回逐条结果（成功/失败/重试次数）；
+  - 保留审计日志 `order.assign_batch`。
+
+### 3) 订单状态流转守卫
+
+`PATCH /api/orders/:id` 增加状态机约束，只允许合法流转（例如 0→1、1→2、2→3 等），非法流转返回 `409`。
+
+### 4) 坐标缺失策略可配置
+
+批量派单新增策略开关：
+
+```bash
+NEXT_PUBLIC_DISPATCH_COORD_POLICY=warn
+```
+
+- `warn`：仅提示（默认）
+- `block`：发现缺坐标订单或司机时直接阻断批量派单
+
+### 5) 写接口统一错误码与 requestId
+
+核心写接口已统一响应结构（示例）：
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "请求参数无效",
+    "details": {}
+  },
+  "requestId": "..."
+}
+```
+
+成功响应同样带 `requestId`，并在响应头返回 `x-request-id`，便于链路排障。
+
+---
+
 ## 模块说明
 
 ```
@@ -102,6 +151,7 @@ app/
   api/
     maps/drivetime/    高德驾车时间代理（服务端，防止 Key 泄漏）
     flights/status/    航班状态查询代理
+    orders/assign-batch 批量确认派单（重试 + 幂等）
 components/
   order-import-dialog  订单导入弹窗
 lib/

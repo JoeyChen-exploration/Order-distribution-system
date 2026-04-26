@@ -107,6 +107,13 @@ async function initTables() {
     CREATE INDEX IF NOT EXISTS "AuditLog_createdAt_idx" ON "AuditLog"("createdAt");
     CREATE INDEX IF NOT EXISTS "AuditLog_action_idx" ON "AuditLog"("action");
     CREATE INDEX IF NOT EXISTS "AuditLog_actorUserId_idx" ON "AuditLog"("actorUserId");
+
+    CREATE TABLE IF NOT EXISTS "LoginRateLimit" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "bucketKey" TEXT NOT NULL,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS "LoginRateLimit_bucketKey_createdAt_idx" ON "LoginRateLimit"("bucketKey", "createdAt");
   `)
   console.log("✓ 数据库表已创建")
 }

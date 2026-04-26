@@ -3,6 +3,7 @@ import { db } from "@/lib/db"
 import { requireAuth } from "@/lib/auth-server"
 import { createDispatchHistorySchema } from "@/lib/validation"
 import { writeAuditLog } from "@/lib/audit-log"
+import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 
 export async function GET(req: NextRequest) {
   const auth = requireAuth(req)
@@ -21,12 +22,19 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req)
   const auth = requireAuth(req)
   if (auth.error) return auth.error
 
   const parsed = createDispatchHistorySchema.safeParse(await req.json())
   if (!parsed.success) {
-    return NextResponse.json({ error: "请求参数无效", details: parsed.error.flatten() }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "请求参数无效",
+      details: parsed.error.flatten(),
+    })
   }
 
   const { totalOrders, matched, unmatched, items } = parsed.data
@@ -44,7 +52,7 @@ export async function POST(req: NextRequest) {
     action: "dispatch_history.create",
     entity: "dispatch_history",
     entityId: record.id,
-    metadata: { totalOrders, matched, unmatched },
+    metadata: { totalOrders, matched, unmatched, requestId },
   })
-  return NextResponse.json({ id: record.id })
+  return jsonWithRequestId({ id: record.id }, requestId)
 }

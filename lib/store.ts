@@ -88,6 +88,16 @@ export async function assignOrder(orderId: string, driverId: string): Promise<Or
   return res.json()
 }
 
+export async function assignOrdersBatch(assignments: Array<{ orderId: string; driverId: string }>, dispatchRequestId?: string) {
+  const res = await fetch("/api/orders/assign-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ assignments, dispatchRequestId }),
+  })
+  if (!res.ok) return null
+  return res.json()
+}
+
 export async function deleteOrder(id: string): Promise<void> {
   await fetch(`/api/orders/${id}`, { method: 'DELETE' })
 }
