@@ -2,6 +2,25 @@
 
 import type { Driver, Order, User, DashboardStats } from './types'
 
+const EMPTY_STATS: DashboardStats = {
+  totalOrders: 0,
+  pendingOrders: 0,
+  assignedOrders: 0,
+  inProgressOrders: 0,
+  completedOrders: 0,
+  cancelledOrders: 0,
+  totalDrivers: 0,
+  availableDrivers: 0,
+  busyDrivers: 0,
+}
+
+function tryUnwrapData<T>(payload: unknown): T | null {
+  if (payload && typeof payload === "object" && "data" in payload) {
+    return (payload as { data: T }).data
+  }
+  return null
+}
+
 // ─── Drivers ──────────────────────────────────────────────────────────────────
 
 export async function getDrivers(params?: { status?: string; vehicleType?: string }): Promise<Driver[]> {
@@ -51,7 +70,11 @@ export async function getAvailableDrivers(vehicleType?: string): Promise<Driver[
 export async function getOrders(status?: number): Promise<Order[]> {
   const query = status !== undefined ? `?status=${status}` : ''
   const res = await fetch(`/api/orders${query}`)
-  return res.json()
+  if (!res.ok) return []
+  const payload = await res.json()
+  if (Array.isArray(payload)) return payload as Order[]
+  const unwrapped = tryUnwrapData<Order[]>(payload)
+  return Array.isArray(unwrapped) ? unwrapped : []
 }
 
 export async function getOrderById(id: string): Promise<Order | null> {
@@ -66,7 +89,19 @@ export async function createOrder(data: Omit<Order, 'id' | 'createdAt' | 'update
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-  return res.json()
+  const payload = await res.json().catch(() => null)
+  if (!res.ok) {
+    const message =
+      (payload && typeof payload === "object" && "error" in payload &&
+        typeof (payload as { error?: { message?: string } }).error?.message === "string" &&
+        (payload as { error?: { message?: string } }).error?.message) ||
+      `创建订单失败 (HTTP ${res.status})`
+    throw new Error(message)
+  }
+  if (!payload || typeof payload !== "object" || !("id" in payload)) {
+    throw new Error("创建订单失败：接口未返回有效订单数据")
+  }
+  return payload as Order
 }
 
 export async function updateOrder(id: string, data: Partial<Order>): Promise<Order> {
@@ -151,6 +186,10 @@ function setCurrentUser(user: User | null) {
   }
 }
 
+export function clearCurrentUser(): void {
+  setCurrentUser(null)
+}
+
 export async function login(username: string, password: string): Promise<User | null> {
   const res = await fetch('/api/users/login', {
     method: 'POST',
@@ -172,5 +211,19 @@ export function logout(): void {
 
 export async function getDashboardStats(): Promise<DashboardStats> {
   const res = await fetch('/api/stats')
-  return res.json()
+  if (!res.ok) return EMPTY_STATS
+  const payload = await res.json()
+  const stats = tryUnwrapData<DashboardStats>(payload) ?? payload
+  if (!stats || typeof stats !== "object") return EMPTY_STATS
+  return {
+    totalOrders: Number((stats as DashboardStats).totalOrders ?? 0),
+    pendingOrders: Number((stats as DashboardStats).pendingOrders ?? 0),
+    assignedOrders: Number((stats as DashboardStats).assignedOrders ?? 0),
+    inProgressOrders: Number((stats as DashboardStats).inProgressOrders ?? 0),
+    completedOrders: Number((stats as DashboardStats).completedOrders ?? 0),
+    cancelledOrders: Number((stats as DashboardStats).cancelledOrders ?? 0),
+    totalDrivers: Number((stats as DashboardStats).totalDrivers ?? 0),
+    availableDrivers: Number((stats as DashboardStats).availableDrivers ?? 0),
+    busyDrivers: Number((stats as DashboardStats).busyDrivers ?? 0),
+  }
 }

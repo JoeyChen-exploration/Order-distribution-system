@@ -53,6 +53,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { format } from "date-fns"
 import { zhCN } from "date-fns/locale"
@@ -159,6 +168,13 @@ export default function OrdersPage() {
   const [cancelAllOpen, setCancelAllOpen] = useState(false)
   const [flightStatuses, setFlightStatuses] = useState<Map<string, FlightStatus>>(new Map())
   const [loadingFlights, setLoadingFlights] = useState(false)
+  const [coordFixOpen, setCoordFixOpen] = useState(false)
+  const [coordFixOrderId, setCoordFixOrderId] = useState("")
+  const [coordFixPickupAddress, setCoordFixPickupAddress] = useState("")
+  const [coordFixDropoffAddress, setCoordFixDropoffAddress] = useState("")
+  const [coordFixLoading, setCoordFixLoading] = useState(false)
+  const [coordFixError, setCoordFixError] = useState("")
+  const [coordFixHint, setCoordFixHint] = useState("")
   const pageSize = 50
 
   useEffect(() => {
@@ -209,6 +225,102 @@ export default function OrdersPage() {
       inProgress: orders.filter(o => o.status === 1 || o.status === 2).length,
     }
   }, [orders])
+
+  function isBadCoord(order: Order) {
+    return !order.pickupLat || !order.pickupLng || !order.dropoffLat || !order.dropoffLng
+  }
+
+  const badCoordOrders = useMemo(() => {
+    return orders.filter(isBadCoord)
+  }, [orders])
+
+  const selectedCoordFixOrder = useMemo(() => {
+    return badCoordOrders.find((o) => o.id === coordFixOrderId) || null
+  }, [badCoordOrders, coordFixOrderId])
+
+  function extractCity(address: string): string {
+    const m = address.match(/^[\u4e00-\u9fa5]{2,4}(?:市|省|区|县)/)
+    return m ? m[0].replace(/省|区|县/, "市") : "上海"
+  }
+
+  async function geocodeAddr(address: string): Promise<{ lat: number; lng: number } | null> {
+    if (!address) return null
+    try {
+      const city = extractCity(address)
+      const res = await fetch(`/api/geocode?address=${encodeURIComponent(address)}&city=${encodeURIComponent(city)}`)
+      const data = await res.json()
+      if (data?.lat && data?.lng) return { lat: data.lat, lng: data.lng }
+    } catch {}
+    return null
+  }
+
+  const openCoordFixDialog = () => {
+    if (badCoordOrders.length === 0) return
+    const first = badCoordOrders[0]
+    setCoordFixOrderId(first.id)
+    setCoordFixPickupAddress(first.pickupAddress || "")
+    setCoordFixDropoffAddress(first.dropoffAddress || "")
+    setCoordFixError("")
+    setCoordFixHint("")
+    setCoordFixOpen(true)
+  }
+
+  const handleCoordFixOrderChange = (orderId: string) => {
+    setCoordFixOrderId(orderId)
+    const order = badCoordOrders.find((o) => o.id === orderId)
+    setCoordFixPickupAddress(order?.pickupAddress || "")
+    setCoordFixDropoffAddress(order?.dropoffAddress || "")
+    setCoordFixError("")
+    setCoordFixHint("")
+  }
+
+  const handleResolveAndSaveCoord = async () => {
+    if (!selectedCoordFixOrder) return
+    setCoordFixLoading(true)
+    setCoordFixError("")
+    setCoordFixHint("")
+    try {
+      const [pickupCoord, dropoffCoord] = await Promise.all([
+        geocodeAddr(coordFixPickupAddress.trim()),
+        geocodeAddr(coordFixDropoffAddress.trim()),
+      ])
+      if (!pickupCoord && !dropoffCoord) {
+        setCoordFixError("上下车地址都未解析成功，请补充更完整的中文地址后重试。")
+        return
+      }
+
+      const updates: Partial<Order> = {
+        pickupAddress: coordFixPickupAddress.trim(),
+        dropoffAddress: coordFixDropoffAddress.trim(),
+      }
+      if (pickupCoord) {
+        updates.pickupLat = pickupCoord.lat
+        updates.pickupLng = pickupCoord.lng
+      }
+      if (dropoffCoord) {
+        updates.dropoffLat = dropoffCoord.lat
+        updates.dropoffLng = dropoffCoord.lng
+      }
+
+      await updateOrder(selectedCoordFixOrder.id, updates)
+      const fresh = await getOrders()
+      setOrders(fresh)
+      const remaining = fresh.filter(isBadCoord)
+
+      if (remaining.length === 0) {
+        setCoordFixOpen(false)
+        return
+      }
+
+      const next = remaining.find((o) => o.id === selectedCoordFixOrder.id) || remaining[0]
+      setCoordFixOrderId(next.id)
+      setCoordFixPickupAddress(next.pickupAddress || "")
+      setCoordFixDropoffAddress(next.dropoffAddress || "")
+      setCoordFixHint("已保存。若仍显示为坏坐标，说明仍有一侧地址未成功解析。")
+    } finally {
+      setCoordFixLoading(false)
+    }
+  }
 
   const getDriverName = (driverId?: string) => {
     if (!driverId) return "-"
@@ -411,6 +523,10 @@ export default function OrdersPage() {
             <Upload className="mr-2 h-4 w-4" />
             导入订单
           </Button>
+          <Button variant="outline" onClick={openCoordFixDialog} disabled={badCoordOrders.length === 0}>
+            <MapPin className="mr-2 h-4 w-4" />
+            修复坏坐标{badCoordOrders.length > 0 ? ` (${badCoordOrders.length})` : ""}
+          </Button>
           <Button asChild>
             <Link href="/orders/create">
               <Plus className="mr-2 h-4 w-4" />
@@ -500,6 +616,18 @@ export default function OrdersPage() {
           </div>
         )
       })()}
+
+      {badCoordOrders.length > 0 && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="text-sm text-amber-300">
+            {badCoordOrders.length} 条订单坐标不完整，建议手动修正地址并重新解析，避免派单距离评分不准。
+          </div>
+          <Button size="sm" variant="outline" onClick={openCoordFixDialog}>
+            <MapPin className="mr-2 h-4 w-4" />
+            打开修复窗口
+          </Button>
+        </div>
+      )}
 
       {/* Filters */}
       <Card>
@@ -895,6 +1023,72 @@ export default function OrdersPage() {
         onOpenChange={setImportDialogOpen}
         onSuccess={async () => setOrders(await getOrders())}
       />
+      <Dialog open={coordFixOpen} onOpenChange={setCoordFixOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>修复坏坐标订单</DialogTitle>
+            <DialogDescription>
+              手动编辑上下车地址后重新解析并保存坐标。当前待修复 {badCoordOrders.length} 条。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">选择订单</p>
+              <Select value={coordFixOrderId} onValueChange={handleCoordFixOrderChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="请选择坏坐标订单" />
+                </SelectTrigger>
+                <SelectContent>
+                  {badCoordOrders.map((o) => (
+                    <SelectItem key={o.id} value={o.id}>
+                      {o.orderNo}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {selectedCoordFixOrder && (
+              <>
+                <div className="rounded-md border border-border/60 p-2 text-xs text-muted-foreground">
+                  当前坐标：
+                  上车({selectedCoordFixOrder.pickupLat?.toFixed?.(6) ?? selectedCoordFixOrder.pickupLat}, {selectedCoordFixOrder.pickupLng?.toFixed?.(6) ?? selectedCoordFixOrder.pickupLng})
+                  ，下车({selectedCoordFixOrder.dropoffLat?.toFixed?.(6) ?? selectedCoordFixOrder.dropoffLat}, {selectedCoordFixOrder.dropoffLng?.toFixed?.(6) ?? selectedCoordFixOrder.dropoffLng})
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">上车地址</p>
+                  <Textarea
+                    value={coordFixPickupAddress}
+                    onChange={(e) => setCoordFixPickupAddress(e.target.value)}
+                    rows={3}
+                    placeholder="请输入更完整的中文上车地址"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">下车地址</p>
+                  <Textarea
+                    value={coordFixDropoffAddress}
+                    onChange={(e) => setCoordFixDropoffAddress(e.target.value)}
+                    rows={3}
+                    placeholder="请输入更完整的中文下车地址"
+                  />
+                </div>
+              </>
+            )}
+            {coordFixError && <p className="text-sm text-destructive">{coordFixError}</p>}
+            {coordFixHint && <p className="text-sm text-primary">{coordFixHint}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCoordFixOpen(false)} disabled={coordFixLoading}>
+              关闭
+            </Button>
+            <Button onClick={handleResolveAndSaveCoord} disabled={coordFixLoading || !selectedCoordFixOrder}>
+              {coordFixLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              重新解析并保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

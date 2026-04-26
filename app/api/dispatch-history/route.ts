@@ -5,10 +5,31 @@ import { createDispatchHistorySchema } from "@/lib/validation"
 import { writeAuditLog } from "@/lib/audit-log"
 import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 
+let ensureDispatchHistoryTablePromise: Promise<void> | null = null
+
+async function ensureDispatchHistoryTable() {
+  if (ensureDispatchHistoryTablePromise) return ensureDispatchHistoryTablePromise
+  ensureDispatchHistoryTablePromise = (async () => {
+    await db.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "DispatchHistory" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "totalOrders" INTEGER NOT NULL,
+        "matched" INTEGER NOT NULL,
+        "unmatched" INTEGER NOT NULL,
+        "items" TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS "DispatchHistory_createdAt_idx" ON "DispatchHistory"("createdAt");
+    `)
+  })()
+  return ensureDispatchHistoryTablePromise
+}
+
 export async function GET(req: NextRequest) {
   const auth = requireAuth(req)
   if (auth.error) return auth.error
 
+  await ensureDispatchHistoryTable()
   const records = await db.dispatchHistory.findMany({
     orderBy: { createdAt: "desc" },
   })
@@ -26,6 +47,7 @@ export async function POST(req: NextRequest) {
   const auth = requireAuth(req)
   if (auth.error) return auth.error
 
+  await ensureDispatchHistoryTable()
   const parsed = createDispatchHistorySchema.safeParse(await req.json())
   if (!parsed.success) {
     return errorWithRequestId({

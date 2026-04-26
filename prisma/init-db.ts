@@ -56,6 +56,15 @@ async function initTables() {
       "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS "DispatchHistory" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "totalOrders" INTEGER NOT NULL,
+      "matched" INTEGER NOT NULL,
+      "unmatched" INTEGER NOT NULL,
+      "items" TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS "Order" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "orderNo" TEXT NOT NULL,
@@ -82,6 +91,7 @@ async function initTables() {
       "driverName" TEXT,
       "modifiedUserId" TEXT,
       "importBatchId" TEXT,
+      "metadata" TEXT,
       CONSTRAINT "Order_driverId_fkey" FOREIGN KEY ("driverId") REFERENCES "Driver" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
       CONSTRAINT "Order_modifiedUserId_fkey" FOREIGN KEY ("modifiedUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE,
       CONSTRAINT "Order_importBatchId_fkey" FOREIGN KEY ("importBatchId") REFERENCES "ImportBatch" ("id") ON DELETE SET NULL ON UPDATE CASCADE
@@ -115,6 +125,21 @@ async function initTables() {
     );
     CREATE INDEX IF NOT EXISTS "LoginRateLimit_bucketKey_createdAt_idx" ON "LoginRateLimit"("bucketKey", "createdAt");
   `)
+
+  // 兼容旧库：补齐 Driver.workingHours 列（旧表可能缺失该列）
+  const driverCols = await libsql.execute(`PRAGMA table_info("Driver")`)
+  const colNames = (driverCols.rows || []).map((r: Record<string, unknown>) => String(r.name))
+  if (!colNames.includes("workingHours")) {
+    await libsql.execute(`ALTER TABLE "Driver" ADD COLUMN "workingHours" TEXT`)
+  }
+
+  // 兼容旧库：补齐 Order.metadata 列（旧表可能缺失该列）
+  const orderCols = await libsql.execute(`PRAGMA table_info("Order")`)
+  const orderColNames = (orderCols.rows || []).map((r: Record<string, unknown>) => String(r.name))
+  if (!orderColNames.includes("metadata")) {
+    await libsql.execute(`ALTER TABLE "Order" ADD COLUMN "metadata" TEXT`)
+  }
+
   console.log("✓ 数据库表已创建")
 }
 

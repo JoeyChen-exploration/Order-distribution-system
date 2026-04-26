@@ -336,10 +336,38 @@ export default function DispatchPage() {
     if (selectedOrders.size === 0) return
 
     const ordersToDispatch = filteredOrders.filter(o => selectedOrders.has(o.id))
+    const badCoordSelected = ordersToDispatch.filter(
+      (o) => !o.pickupLat || !o.pickupLng || !o.dropoffLat || !o.dropoffLng,
+    )
+
+    // 规则：被选中的坏坐标订单自动落空，不参与分配
+    if (badCoordSelected.length > 0) {
+      await Promise.all(
+        badCoordSelected.map((o) =>
+          updateOrder(o.id, { status: 5, driverId: null, driverName: null }),
+        ),
+      )
+    }
+
+    const dispatchableOrders = ordersToDispatch.filter(
+      (o) => !badCoordSelected.some((bad) => bad.id === o.id),
+    )
+
+    if (badCoordSelected.length > 0 && dispatchableOrders.length === 0) {
+      const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
+      setAllOrders(orders)
+      setDrivers(driverList)
+      setPendingOrders(orders.filter((o) => o.status === 0))
+      const remaining = new Set(selectedOrders)
+      badCoordSelected.forEach((o) => remaining.delete(o.id))
+      setSelectedOrders(remaining)
+      alert(`已将 ${badCoordSelected.length} 条坏坐标订单自动置为空单，不参与分配。`)
+      return
+    }
 
     // P0 规则：批量派单仅允许 T+1 及以后订单
     const today = todayDateStr()
-    const notFutureOrders = ordersToDispatch.filter((o) => o.flightDate <= today)
+    const notFutureOrders = dispatchableOrders.filter((o) => o.flightDate <= today)
     if (notFutureOrders.length > 0) {
       alert(
         `批量派单仅允许未来订单（T+1及以后）。以下订单日期不满足要求：\n${notFutureOrders
@@ -350,7 +378,7 @@ export default function DispatchPage() {
     }
 
     // 检查包车时长未确认的订单
-    const unconfirmedCharter = ordersToDispatch.filter(o => {
+    const unconfirmedCharter = dispatchableOrders.filter(o => {
       try { const m = JSON.parse(o.metadata || "{}"); return (m["服务类型"] === "包车" || m.serviceType === "包车") && !m["包车时长"] } catch { return false }
     })
     if (unconfirmedCharter.length > 0) {
@@ -359,7 +387,7 @@ export default function DispatchPage() {
     }
 
     if (DISPATCH_COORD_POLICY === "block") {
-      const missingOrderCoords = ordersToDispatch.filter(
+      const missingOrderCoords = dispatchableOrders.filter(
         (o) => !o.pickupLat || !o.pickupLng || !o.dropoffLat || !o.dropoffLng,
       )
       const missingDriverCoords = drivers.filter((d) => !d.homeLat || !d.homeLng)
@@ -381,7 +409,7 @@ export default function DispatchPage() {
     // Tasks are thunks so we control when each request fires (for rate limiting)
     const routeTasks: Array<() => Promise<void>> = []
 
-    for (const order of ordersToDispatch) {
+    for (const order of dispatchableOrders) {
       if (!order.pickupLat || !order.pickupLng) continue
       for (const driver of candidateDrivers) {
         const driverOrders = allOrders.filter(
@@ -435,14 +463,24 @@ export default function DispatchPage() {
     if (cancelledRef.current) return
 
     // ── Phase 3: Run algorithm ────────────────────────────────────────────────
-    setDispatchProgress({ phase: "dispatch", current: 0, total: ordersToDispatch.length })
-    const results = batchDispatch(ordersToDispatch, candidateDrivers, allOrders, travelCache)
+    setDispatchProgress({ phase: "dispatch", current: 0, total: dispatchableOrders.length })
+    const results = batchDispatch(dispatchableOrders, candidateDrivers, allOrders, travelCache)
 
     if (cancelledRef.current) return
 
     setDispatchProgress(null)
     setBatchResults(results)
     setIsProcessing(false)
+    if (badCoordSelected.length > 0) {
+      const [orders, driverList] = await Promise.all([getOrders(), getDrivers()])
+      setAllOrders(orders)
+      setDrivers(driverList)
+      setPendingOrders(orders.filter((o) => o.status === 0))
+      const remaining = new Set(selectedOrders)
+      badCoordSelected.forEach((o) => remaining.delete(o.id))
+      setSelectedOrders(remaining)
+      alert(`已将 ${badCoordSelected.length} 条坏坐标订单自动置为空单，其余订单已完成智能匹配。`)
+    }
   }
 
   const handleConfirmDispatch = async (orderId: string, driverId: string) => {

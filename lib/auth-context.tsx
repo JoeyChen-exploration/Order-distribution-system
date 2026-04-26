@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { User } from './types'
-import { getCurrentUser, login as doLogin, logout as doLogout } from './store'
+import { clearCurrentUser, getCurrentUser, login as doLogin, logout as doLogout } from './store'
 
 interface AuthContextType {
   user: User | null
@@ -18,9 +18,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    const currentUser = getCurrentUser()
-    setUser(currentUser)
-    setIsLoading(false)
+    let cancelled = false
+
+    async function bootstrap() {
+      const currentUser = getCurrentUser()
+      if (!currentUser) {
+        if (!cancelled) {
+          setUser(null)
+          setIsLoading(false)
+        }
+        return
+      }
+
+      try {
+        const res = await fetch('/api/users/me')
+        if (!res.ok) {
+          clearCurrentUser()
+          if (!cancelled) setUser(null)
+          return
+        }
+        if (!cancelled) setUser(currentUser)
+      } catch {
+        clearCurrentUser()
+        if (!cancelled) setUser(null)
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
+    }
+
+    bootstrap()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const login = async (username: string, password: string): Promise<boolean> => {
