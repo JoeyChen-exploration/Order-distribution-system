@@ -89,7 +89,19 @@ export async function createOrder(data: Omit<Order, 'id' | 'createdAt' | 'update
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-  return res.json()
+  const payload = await res.json().catch(() => null)
+  if (!res.ok) {
+    const message =
+      (payload && typeof payload === "object" && "error" in payload &&
+        typeof (payload as { error?: { message?: string } }).error?.message === "string" &&
+        (payload as { error?: { message?: string } }).error?.message) ||
+      `创建订单失败 (HTTP ${res.status})`
+    throw new Error(message)
+  }
+  if (!payload || typeof payload !== "object" || !("id" in payload)) {
+    throw new Error("创建订单失败：接口未返回有效订单数据")
+  }
+  return payload as Order
 }
 
 export async function updateOrder(id: string, data: Partial<Order>): Promise<Order> {
@@ -172,6 +184,10 @@ function setCurrentUser(user: User | null) {
   } else {
     localStorage.removeItem(CURRENT_USER_KEY)
   }
+}
+
+export function clearCurrentUser(): void {
+  setCurrentUser(null)
 }
 
 export async function login(username: string, password: string): Promise<User | null> {

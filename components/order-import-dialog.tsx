@@ -174,7 +174,7 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
   const [isImporting, setIsImporting] = useState(false)
   const [progress, setProgress] = useState(0)
   const [progressLabel, setProgressLabel] = useState("")
-  const [result, setResult] = useState<{ success: number; failed: number; geoFailed: string[] } | null>(null)
+  const [result, setResult] = useState<{ success: number; failed: number; geoFailed: string[]; failedDetails: string[] } | null>(null)
 
   const reset = () => {
     setFile(null)
@@ -256,6 +256,7 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
     setProgress(0)
     let success = 0, failed = 0
     const geoFailed: string[] = []
+    const failedDetails: string[] = []
 
     for (let i = 0; i < valid.length; i++) {
       setProgressLabel(`正在地理编码 ${i + 1} / ${valid.length}，请勿关闭…`)
@@ -295,14 +296,17 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
           metadata: Object.keys(extra).length > 0 ? JSON.stringify(extra) : undefined,
         })
         success++
-      } catch {
+      } catch (e) {
         failed++
+        const msg = e instanceof Error ? e.message : String(e)
+        const orderNo = String(valid[i]?.data?.orderNo || `row-${valid[i]?.rowIndex ?? i + 1}`)
+        failedDetails.push(`${orderNo}: ${msg}`)
       }
       setProgress(Math.round(((i + 1) / valid.length) * 100))
     }
 
     setProgressLabel("")
-    setResult({ success, failed, geoFailed })
+    setResult({ success, failed, geoFailed, failedDetails })
     setIsImporting(false)
     if (success > 0) onSuccess()
   }
@@ -362,6 +366,16 @@ export function OrderImportDialog({ open, onOpenChange, onSuccess }: Props) {
                     ))}
                   </ul>
                   <p className="text-xs text-muted-foreground">建议手动派单，或将地址改为中文后重新导入</p>
+                </div>
+              )}
+              {result.failedDetails.length > 0 && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 space-y-2">
+                  <p className="text-sm font-medium text-destructive">失败详情（最多展示 10 条）</p>
+                  <ul className="space-y-1 max-h-40 overflow-auto">
+                    {result.failedDetails.slice(0, 10).map((line, idx) => (
+                      <li key={idx} className="text-xs font-mono text-destructive/90">{line}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>
