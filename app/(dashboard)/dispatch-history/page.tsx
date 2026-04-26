@@ -85,10 +85,30 @@ export default function DispatchHistoryPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    fetch("/api/dispatch-history")
-      .then(r => r.json())
-      .then(data => { setRecords(data); setLoading(false) })
-      .catch(() => setLoading(false))
+    async function loadHistory() {
+      try {
+        const res = await fetch("/api/dispatch-history")
+        if (!res.ok) {
+          setRecords([])
+          return
+        }
+        const payload = await res.json()
+        if (Array.isArray(payload)) {
+          setRecords(payload)
+          return
+        }
+        if (payload && typeof payload === "object" && Array.isArray((payload as { data?: unknown }).data)) {
+          setRecords((payload as { data: DispatchHistoryRecord[] }).data)
+          return
+        }
+        setRecords([])
+      } catch {
+        setRecords([])
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadHistory()
   }, [])
 
   const toggle = (id: string) => {

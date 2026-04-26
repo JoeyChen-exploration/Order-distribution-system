@@ -56,6 +56,15 @@ async function initTables() {
       "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS "DispatchHistory" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "totalOrders" INTEGER NOT NULL,
+      "matched" INTEGER NOT NULL,
+      "unmatched" INTEGER NOT NULL,
+      "items" TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS "Order" (
       "id" TEXT NOT NULL PRIMARY KEY,
       "orderNo" TEXT NOT NULL,
