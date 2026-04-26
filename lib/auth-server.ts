@@ -1,5 +1,6 @@
 import { createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from "crypto"
 import { NextRequest, NextResponse } from "next/server"
+import { errorWithRequestId, getRequestId } from "@/lib/api-response"
 
 export const AUTH_COOKIE_NAME = "ods_session"
 const SESSION_TTL_SECONDS = 60 * 60 * 12
@@ -19,7 +20,14 @@ type SessionPayload = SessionUser & {
 }
 
 function getSessionSecret() {
-  return process.env.AUTH_SESSION_SECRET || "dev-only-change-me"
+  const secret = process.env.AUTH_SESSION_SECRET
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("AUTH_SESSION_SECRET is required in production")
+    }
+    return "dev-only-change-me"
+  }
+  return secret
 }
 
 function b64urlEncode(input: Buffer | string): string {
@@ -113,12 +121,29 @@ export function clearAuthCookie(res: NextResponse) {
 }
 
 export function requireAuth(req: NextRequest, allowedRoles?: string[]) {
+  const requestId = getRequestId(req)
   const session = getSessionFromRequest(req)
   if (!session) {
-    return { session: null, error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) }
+    return {
+      session: null,
+      error: errorWithRequestId({
+        requestId,
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "Unauthorized",
+      }),
+    }
   }
   if (allowedRoles && !allowedRoles.includes(session.role)) {
-    return { session: null, error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) }
+    return {
+      session: null,
+      error: errorWithRequestId({
+        requestId,
+        status: 403,
+        code: "FORBIDDEN",
+        message: "Forbidden",
+      }),
+    }
   }
   return { session, error: null }
 }

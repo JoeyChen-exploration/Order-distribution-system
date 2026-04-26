@@ -3,6 +3,7 @@ import { db } from "@/lib/db"
 import { requireAuth } from "@/lib/auth-server"
 import { createDriverSchema } from "@/lib/validation"
 import { writeAuditLog } from "@/lib/audit-log"
+import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 
 // GET /api/drivers
 export async function GET(req: NextRequest) {
@@ -29,13 +30,20 @@ export async function GET(req: NextRequest) {
 
 // POST /api/drivers
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req)
   const auth = requireAuth(req)
   if (auth.error) return auth.error
 
   try {
     const parsed = createDriverSchema.safeParse(await req.json())
     if (!parsed.success) {
-      return NextResponse.json({ error: "请求参数无效", details: parsed.error.flatten() }, { status: 400 })
+      return errorWithRequestId({
+        requestId,
+        status: 400,
+        code: "VALIDATION_ERROR",
+        message: "请求参数无效",
+        details: parsed.error.flatten(),
+      })
     }
     const body = parsed.data
     const driver = await db.driver.create({ data: body })
@@ -45,9 +53,9 @@ export async function POST(req: NextRequest) {
       action: "driver.create",
       entity: "driver",
       entityId: driver.id,
-      metadata: { name: driver.name, vehiclePlate: driver.vehiclePlate },
+      metadata: { name: driver.name, vehiclePlate: driver.vehiclePlate, requestId },
     })
-    return NextResponse.json(driver, { status: 201 })
+    return jsonWithRequestId(driver, requestId, 201)
   } catch (e) {
     await writeAuditLog({
       req,
@@ -56,7 +64,13 @@ export async function POST(req: NextRequest) {
       entity: "driver",
       status: "failed",
       message: String(e),
+      metadata: { requestId },
     })
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return errorWithRequestId({
+      requestId,
+      status: 500,
+      code: "INTERNAL_ERROR",
+      message: String(e),
+    })
   }
 }

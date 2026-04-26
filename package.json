@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test": "node --test --import tsx tests/*.test.ts",
     "start": "next start",
     "lint": "eslint .",
     "db:init": "npx tsx prisma/init-db.ts",

@@ -40,12 +40,12 @@ npm run dev
 
 ### 2) 登录限流
 
-`POST /api/users/login` 已加入内存限流策略：
+`POST /api/users/login` 已加入**数据库持久化限流**策略（`LoginRateLimit`）：
 - 维度：`IP + username`
 - 阈值：15 分钟内最多 8 次
 - 超限响应：`429` + `Retry-After`
 
-实现文件：`lib/rate-limit.ts`
+实现文件：`lib/login-rate-limit.ts`
 
 ### 3) 审计日志（Audit Log）
 
@@ -89,6 +89,55 @@ file:./prisma/dev.db
 
 ---
 
+## P0 收敛更新（2026-04-26）
+
+### 1) 批量派单仅允许未来订单（T+1）
+
+- 前端批量派单会阻断 `flightDate <= 今天` 的订单。
+- 后端派单接口（单条/批量）也做同样校验，防止绕过前端。
+
+### 2) 批量确认派单重试 + 幂等
+
+- 新增 `POST /api/orders/assign-batch`：
+  - 批量按 `orderId` 去重；
+  - 单条失败自动最多重试 3 次；
+  - 返回逐条结果（成功/失败/重试次数）；
+  - 保留审计日志 `order.assign_batch`。
+
+### 3) 订单状态流转守卫
+
+`PATCH /api/orders/:id` 增加状态机约束，只允许合法流转（例如 0→1、1→2、2→3 等），非法流转返回 `409`。
+
+### 4) 坐标缺失策略可配置
+
+批量派单新增策略开关：
+
+```bash
+NEXT_PUBLIC_DISPATCH_COORD_POLICY=warn
+```
+
+- `warn`：仅提示（默认）
+- `block`：发现缺坐标订单或司机时直接阻断批量派单
+
+### 5) 写接口统一错误码与 requestId
+
+核心写接口已统一响应结构（示例）：
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "请求参数无效",
+    "details": {}
+  },
+  "requestId": "..."
+}
+```
+
+成功响应同样带 `requestId`，并在响应头返回 `x-request-id`，便于链路排障。
+
+---
+
 ## 模块说明
 
 ```
@@ -102,6 +151,7 @@ app/
   api/
     maps/drivetime/    高德驾车时间代理（服务端，防止 Key 泄漏）
     flights/status/    航班状态查询代理
+    orders/assign-batch 批量确认派单（重试 + 幂等）
 components/
   order-import-dialog  订单导入弹窗
 lib/
@@ -145,6 +195,7 @@ lib/
 总分 = 距离分       × 0.50
      - 车型降级罚分
      - 时间冲突罚分 × 0.25
+     - 航班延误风险罚分
      + 车型完全匹配加分 × 0.25
 ```
 
@@ -178,7 +229,10 @@ distanceScore = max(0, 100 - 距离km × 2)
 #### 时间冲突判定
 
 ```
-required = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
+required = serviceBuffer
+         + travelMinutes(前单下车点 → 后单上车点)
+         + flightDelayRiskBuffer(前序订单)
+
 实际间隔 < required → 冲突
 ```
 
@@ -196,6 +250,22 @@ required = serviceBuffer + travelMinutes(前单下车点 → 后单上车点)
 > **行驶时间来源**：前单下车点 → 后单上车点，haversine 35 km/h 估算（无额外交通系数）。预取缓存方向为「司机起点 → 订单上车点」，与冲突检测方向不同，无法命中缓存。
 >
 > **坐标缺失处理**：travelMinutes = 0，required = serviceBuffer。导入时会弹出警告提示处理坐标问题，不应带缺坐标订单进行派单。
+
+#### 航班延误风险因子（V1 规则版，2026-04-26）
+
+仅对「接机/站」订单生效，当前为**无外部 API 的规则预测**：
+
+- 输出字段：`riskLevel`（none/low/medium/high）、`predictedDelayMinutes`、`confidence`
+- 冲突检测：当前序订单为接机/站时，将 `predictedDelayMinutes` 加入 `required`
+- 评分惩罚：根据风险等级与“最近后续排程余量”扣分（余量越紧，罚分越高）
+
+V1 规则输入因子：
+- 订单时间段（早晚高峰、深夜）
+- 是否紧急单
+- 是否缺少航班号
+- 机场三字码（metadata 中 `airportCode` / `三字码`）
+
+> 说明：V1 目的是提升鲁棒性，不保证“明日延误分钟”的精确预测；后续可升级为接入天气/机场运行/航班动态的 V2 数据版。
 
 有冲突时 `timeConflictPenalty = 50`，扣 50 × 0.25 = 12.5 分，但**不直接排除**（有冲突司机仍进推荐列表，只是不作为 bestMatch）。
 
@@ -392,6 +462,7 @@ AVIATIONSTACK_API_KEY=你的密钥
 | 问题 | 说明 |
 |---|---|
 | 高德 QPS 3次/秒 | 路线预取并发触发限流，超限部分降级为 haversine，建议开通付费套餐（30元/万次） |
+| 航班延误风险为规则预测（V1） | 当前未接外部航班预测 API，延误分钟用于鲁棒性缓冲，不代表精确预测值 |
 | 冲突检测行驶时间用 haversine | 预取缓存方向（司机→上车点）与冲突所需方向（前单下车点→后单上车点）不同，无法命中缓存 |
 | 商务型/豪华型均不接经济型 | 商务型（两档）和豪华型司机拒绝经济型订单，防止高档司机亏损接单 |
 | MRV 复杂度 O(N²·D) | 每轮遍历所有剩余订单 × 司机，100单×22司机约百万次简单运算，实测无感知延迟 |

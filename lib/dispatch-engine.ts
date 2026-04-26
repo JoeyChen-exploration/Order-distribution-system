@@ -17,6 +17,7 @@ export interface DispatchScore {
     workloadScore: number
     distanceScore: number
     timeConflictPenalty: number
+    flightDelayRiskPenalty: number
   }
   reasons: string[]
   hasConflict: boolean
@@ -145,6 +146,61 @@ function getCharterHours(order: Order): number {
   }
 }
 
+type FlightDelayRiskLevel = "none" | "low" | "medium" | "high"
+
+function parseHour(time: string | undefined): number | null {
+  if (!time) return null
+  const [h] = time.split(":").map(Number)
+  return Number.isFinite(h) ? h : null
+}
+
+/**
+ * 规则版航班延误风险预测（V1，不依赖外部 API）
+ * 仅对接机/站订单生效，用于：
+ * 1) 冲突检测增加风险缓冲（分钟）
+ * 2) 评分中加入风险惩罚（分）
+ */
+function predictFlightDelayRisk(order: Order): {
+  level: FlightDelayRiskLevel
+  predictedDelayMinutes: number
+  penalty: number
+  confidence: number
+} {
+  const serviceType = getServiceType(order)
+  if (!serviceType?.startsWith("接机")) {
+    return { level: "none", predictedDelayMinutes: 0, penalty: 0, confidence: 0 }
+  }
+
+  const hour = parseHour(order.pickupTime)
+  let riskScore = 1 // 接机默认存在延误不确定性
+
+  if (!order.flightNo) riskScore += 1
+  if (hour !== null) {
+    if (hour >= 7 && hour < 10) riskScore += 1
+    if (hour >= 16 && hour < 22) riskScore += 2
+    if (hour < 6) riskScore += 1
+  }
+  if (order.isEmergency) riskScore += 1
+
+  // 读取订单 metadata 中的机场三字码（兼容中英文 key）
+  let airportCode = ""
+  if (order.metadata) {
+    try {
+      const meta = typeof order.metadata === "string" ? JSON.parse(order.metadata) : order.metadata
+      airportCode = String(meta["airportCode"] ?? meta["三字码"] ?? "").toUpperCase()
+    } catch {}
+  }
+  if (airportCode === "PVG" || airportCode === "SHA") riskScore += 1
+
+  if (riskScore <= 1) {
+    return { level: "low", predictedDelayMinutes: 15, penalty: 5, confidence: 0.35 }
+  }
+  if (riskScore <= 3) {
+    return { level: "medium", predictedDelayMinutes: 25, penalty: 12, confidence: 0.55 }
+  }
+  return { level: "high", predictedDelayMinutes: 40, penalty: 20, confidence: 0.7 }
+}
+
 /**
  * 返回服务类型的"非行驶"缓冲时间（分钟）。
  *
@@ -208,9 +264,9 @@ function hasTimeConflict(
   existingOrder: Order,
   newOrder: Order,
   cache?: TravelTimeCache,
-): { conflict: boolean; gap: number; required: number; travelMinutes: number } {
+): { conflict: boolean; gap: number; required: number; travelMinutes: number; riskBufferMinutes: number } {
   if (existingOrder.flightDate !== newOrder.flightDate) {
-    return { conflict: false, gap: Infinity, required: 0, travelMinutes: 0 }
+    return { conflict: false, gap: Infinity, required: 0, travelMinutes: 0, riskBufferMinutes: 0 }
   }
 
   const toMinutes = (t: string) => {
@@ -240,9 +296,12 @@ function hasTimeConflict(
 
   // 所需间隔 = 业务缓冲 + 实际行驶时间（前单下车点 → 后单上车点）
   const serviceBuffer = getServiceBuffer(prevType, nextType, charterHours)
-  const required = serviceBuffer + travelMinutes
+  // 前序航班若存在延误风险，将预测延误分钟计入缓冲，降低连锁冲突概率
+  const prevDelayRisk = predictFlightDelayRisk(prevOrder)
+  const riskBufferMinutes = prevDelayRisk.predictedDelayMinutes
+  const required = serviceBuffer + travelMinutes + riskBufferMinutes
 
-  return { conflict: gapMinutes < required, gap: gapMinutes, required, travelMinutes }
+  return { conflict: gapMinutes < required, gap: gapMinutes, required, travelMinutes, riskBufferMinutes }
 }
 
 /** 返回司机在指定日期的"有效起点"坐标（最后一单终点，或家庭地址） */
@@ -354,30 +413,57 @@ export function runDispatchAlgorithm(
     const workload = calculateWorkload(driver, allOrders, targetDate)
     reasons.push(workload === 0 ? "当日无订单" : `当日已接 ${workload} 单`)
 
-    // 4. 时间冲突检查
+    // 4. 航班延误风险（V1 规则版）
+    const flightDelayRisk = predictFlightDelayRisk(order)
+    let delayTightPenalty = flightDelayRisk.penalty
+    if (flightDelayRisk.level !== "none") {
+      reasons.push(
+        `航班延误风险：${flightDelayRisk.level}（预测延误 ${flightDelayRisk.predictedDelayMinutes} 分钟，置信度 ${(flightDelayRisk.confidence * 100).toFixed(0)}%）`,
+      )
+    }
+
+    // 5. 时间冲突检查
     const driverOrders = getDriverAssignedOrders(driver.id, allOrders)
     let hasConflict = false
     let conflictDetails: string | undefined
     let timeConflictPenalty = 0
+    let minPositiveSlack = Infinity
 
     for (const existing of driverOrders) {
       // 任意一方没有 pickupTime，无法判断冲突，跳过
       if (!existing.pickupTime || !order.pickupTime) continue
-      const { conflict, gap, required, travelMinutes } = hasTimeConflict(existing, order, travelCache)
+      const { conflict, gap, required, travelMinutes, riskBufferMinutes } = hasTimeConflict(existing, order, travelCache)
       if (conflict) {
         hasConflict = true
         timeConflictPenalty = 50
         const travelNote = travelMinutes > 0 ? `（含行驶 ${travelMinutes} 分钟）` : ""
-        conflictDetails = `与订单 ${existing.orderNo}（${existing.pickupTime}）时间冲突，间隔 ${gap} 分钟，要求 ≥ ${required} 分钟${travelNote}`
+        const riskNote = riskBufferMinutes > 0 ? ` + 航班风险缓冲 ${riskBufferMinutes} 分钟` : ""
+        conflictDetails = `与订单 ${existing.orderNo}（${existing.pickupTime}）时间冲突，间隔 ${gap} 分钟，要求 ≥ ${required} 分钟${riskNote}${travelNote}`
         reasons.push(conflictDetails)
         break
       }
+      const slack = gap - required
+      if (slack >= 0) minPositiveSlack = Math.min(minPositiveSlack, slack)
     }
     if (!hasConflict) {
       reasons.push("无时间冲突")
     }
+    if (!hasConflict && flightDelayRisk.level !== "none" && Number.isFinite(minPositiveSlack)) {
+      if (minPositiveSlack < 15) {
+        delayTightPenalty = Math.max(delayTightPenalty, 20)
+        reasons.push(`延误鲁棒性较弱：最近排程余量仅 ${Math.round(minPositiveSlack)} 分钟`)
+      } else if (minPositiveSlack < 30) {
+        delayTightPenalty = Math.max(delayTightPenalty, 12)
+        reasons.push(`延误鲁棒性一般：最近排程余量 ${Math.round(minPositiveSlack)} 分钟`)
+      } else if (minPositiveSlack < 60) {
+        delayTightPenalty = Math.max(delayTightPenalty, 6)
+        reasons.push(`延误鲁棒性可接受：最近排程余量 ${Math.round(minPositiveSlack)} 分钟`)
+      } else {
+        reasons.push("延误鲁棒性良好：后续排程余量充足")
+      }
+    }
 
-    // 5. 距离评分（司机有效起点 → 订单取货点）
+    // 6. 距离评分（司机有效起点 → 订单取货点）
     const pos = getDriverEffectivePosition(driver, allOrders, targetDate, targetTime)
     // 如果 cache 有从司机位置到取货点的行驶时间，用行驶时间推算等效距离；否则直接用 haversine
     const cacheKey = `${pos.lng},${pos.lat}->${order.pickupLng},${order.pickupLat}`
@@ -394,12 +480,13 @@ export function runDispatchAlgorithm(
     reasons.push(posLabel)
 
     // ── 综合评分 ──
-    // 距离 50% - 车型降级 - 时间冲突 25% + 车型完全匹配加分 25%
+    // 距离 50% - 车型降级 - 时间冲突 25% - 航班延误风险惩罚 + 车型完全匹配加分 25%
     const vehicleMatchBonus = downgrade === 0 ? 100 : 0
     const totalScore = Math.round(
       distanceScore * 0.5 -
         downgrade -
         timeConflictPenalty * 0.25 +
+        -delayTightPenalty +
         vehicleMatchBonus * 0.25,
     )
 
@@ -413,6 +500,7 @@ export function runDispatchAlgorithm(
         workloadScore: 0,
         distanceScore,
         timeConflictPenalty,
+        flightDelayRiskPenalty: delayTightPenalty,
       },
       reasons,
       hasConflict,

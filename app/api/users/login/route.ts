@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest } from "next/server"
 import { db } from "@/lib/db"
 import { createSessionToken, setAuthCookie, verifyPassword, hashPassword } from "@/lib/auth-server"
 import { z } from "zod"
-import { checkRateLimit, getClientIp } from "@/lib/rate-limit"
 import { writeAuditLog } from "@/lib/audit-log"
+import { checkAndRecordLoginRateLimit } from "@/lib/login-rate-limit"
+import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
 
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(64),
@@ -12,16 +13,23 @@ const loginSchema = z.object({
 
 // POST /api/users/login
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req)
   const parsed = loginSchema.safeParse(await req.json())
   if (!parsed.success) {
-    return NextResponse.json({ error: "请求参数无效" }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "请求参数无效",
+    })
   }
 
   const { username, password } = parsed.data
-  const rateLimit = checkRateLimit({
-    key: `login:${getClientIp(req)}:${username.toLowerCase()}`,
+  const rateLimit = await checkAndRecordLoginRateLimit({
+    req,
+    username,
     limit: 8,
-    windowMs: 15 * 60 * 1000,
+    windowMinutes: 15,
   })
   if (!rateLimit.ok) {
     await writeAuditLog({
@@ -30,12 +38,15 @@ export async function POST(req: NextRequest) {
       entity: "user",
       status: "failed",
       message: "登录被限流",
-      metadata: { username },
+      metadata: { username, requestId },
     })
-    return NextResponse.json(
-      { error: "请求过于频繁，请稍后重试" },
-      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSec) } }
-    )
+    return errorWithRequestId({
+      requestId,
+      status: 429,
+      code: "RATE_LIMITED",
+      message: "请求过于频繁，请稍后重试",
+      headers: { "Retry-After": String(rateLimit.retryAfterSec) },
+    })
   }
 
   const user = await db.user.findUnique({
@@ -51,9 +62,14 @@ export async function POST(req: NextRequest) {
       entity: "user",
       status: "failed",
       message: "用户名或密码错误",
-      metadata: { username },
+      metadata: { username, requestId },
     })
-    return NextResponse.json({ error: "用户名或密码错误" }, { status: 401 })
+    return errorWithRequestId({
+      requestId,
+      status: 401,
+      code: "UNAUTHORIZED",
+      message: "用户名或密码错误",
+    })
   }
 
   if (verify.needsRehash) {
@@ -77,7 +93,7 @@ export async function POST(req: NextRequest) {
     role: user.role,
     name: user.name,
   })
-  const res = NextResponse.json(safeUser)
+  const res = jsonWithRequestId(safeUser, requestId)
   setAuthCookie(res, token)
   await writeAuditLog({
     req,
@@ -89,7 +105,7 @@ export async function POST(req: NextRequest) {
     action: "auth.login.success",
     entity: "user",
     entityId: user.id,
-    metadata: { username: user.username },
+    metadata: { username: user.username, requestId },
   })
   return res
 }

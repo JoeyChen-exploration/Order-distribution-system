@@ -3,6 +3,8 @@ import { db } from "@/lib/db"
 import { requireAuth } from "@/lib/auth-server"
 import { createOrderSchema } from "@/lib/validation"
 import { writeAuditLog } from "@/lib/audit-log"
+import { errorWithRequestId, getRequestId, jsonWithRequestId } from "@/lib/api-response"
+import { normalizeOrderPayload } from "@/lib/order-consistency"
 
 // GET /api/orders
 export async function GET(req: NextRequest) {
@@ -22,14 +24,21 @@ export async function GET(req: NextRequest) {
 
 // POST /api/orders
 export async function POST(req: NextRequest) {
+  const requestId = getRequestId(req)
   const auth = requireAuth(req)
   if (auth.error) return auth.error
 
   const parsed = createOrderSchema.safeParse(await req.json())
   if (!parsed.success) {
-    return NextResponse.json({ error: "请求参数无效", details: parsed.error.flatten() }, { status: 400 })
+    return errorWithRequestId({
+      requestId,
+      status: 400,
+      code: "VALIDATION_ERROR",
+      message: "请求参数无效",
+      details: parsed.error.flatten(),
+    })
   }
-  const body = parsed.data
+  const body = normalizeOrderPayload(parsed.data)
   const { orderNo, ...rest } = body
   const order = await db.order.upsert({
     where: { orderNo },
@@ -42,7 +51,7 @@ export async function POST(req: NextRequest) {
     action: "order.upsert",
     entity: "order",
     entityId: order.id,
-    metadata: { orderNo: order.orderNo, status: order.status },
+    metadata: { orderNo: order.orderNo, status: order.status, requestId },
   })
-  return NextResponse.json(order, { status: 201 })
+  return jsonWithRequestId(order, requestId, 201)
 }
